@@ -95,14 +95,26 @@ export default function WrappedView({ filterQS }: { filterQS: string }) {
   useEffect(() => {
     setLoading(true);
     const qs = filterQS ? `?${filterQS}` : "";
+    // When no date filter is active, use the snapshot endpoint —
+    // pre-computed after every sync, so this returns instantly. When a
+    // filter IS active (user dragged on a chart), the snapshot doesn't
+    // apply; fall back to live endpoints.
+    const wrappedPromise = filterQS
+      ? Promise.all([
+          fetch(`/api/metrics/cost-overview${qs}`).then((r) => r.json()),
+          fetch(`/api/metrics/comparison${qs}`).then((r) => r.json()),
+        ]).then(([c, cmp]) => ({ ok: true, cost_overview: c, comparison: cmp }))
+      : fetch(`/api/metrics/wrapped`).then((r) => r.json());
+
     Promise.all([
-      fetch(`/api/metrics/cost-overview${qs}`).then((r) => r.json()),
-      fetch(`/api/metrics/comparison${qs}`).then((r) => r.json()),
+      wrappedPromise,
       fetch(`/api/metrics/fun-facts${qs}`).then((r) => r.json()),
     ])
-      .then(([c, cmp, fun]) => {
-        if (c.ok) setCost(c);
-        setComparison(cmp || null);
+      .then(([snap, fun]) => {
+        if (snap?.ok) {
+          if (snap.cost_overview?.ok) setCost(snap.cost_overview);
+          setComparison(snap.comparison || null);
+        }
         setFunFacts(fun);
       })
       .finally(() => setLoading(false));

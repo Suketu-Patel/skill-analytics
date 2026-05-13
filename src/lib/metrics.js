@@ -1,4 +1,32 @@
 import { queryRows, sqlNumber, sqlString } from "./sqlite.js";
+import { aggregate, aggregateBy } from "./tokens.js";
+
+// Canonical billable-token aggregator. Every endpoint that wants to
+// report "total tokens" should route through here so the numbers match
+// across tabs. Internally pulls (source, raw_token_fields) rows from
+// token_usage and runs them through the tokens.js normalizer.
+function billableTokensTotal(opts = {}) {
+  const tuWhere = whereFilter(opts, "tu");
+  const where = tuWhere ? `WHERE ${tuWhere}` : "";
+  const rows = queryRows(`
+    SELECT source, input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens
+    FROM token_usage tu ${where}
+  `);
+  return aggregate(rows).billable;
+}
+
+function billableTokensBySource(opts = {}) {
+  const tuWhere = whereFilter(opts, "tu");
+  const where = tuWhere ? `WHERE ${tuWhere}` : "";
+  const rows = queryRows(`
+    SELECT source, input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens
+    FROM token_usage tu ${where}
+  `);
+  const groups = aggregateBy(rows, (r) => r.source);
+  const out = {};
+  for (const [k, v] of groups) out[k] = v.billable;
+  return out;
+}
 
 function one(sql, fallback = {}) {
   return queryRows(sql)[0] || fallback;
@@ -46,13 +74,10 @@ export function getOverviewMetrics(opts = {}) {
       (SELECT COUNT(DISTINCT skill_name) FROM skill_events se ${errEventsWhere}) AS active_skills,
       (SELECT COUNT(*) FROM errors e ${errWhere}) AS errors,
       (SELECT COUNT(*) FROM errors e ${errWhere ? errWhere + " AND" : "WHERE"} e.severity = 'error') AS hard_errors,
-      (SELECT COALESCE(SUM(max_tokens), 0)
-       FROM (
-         SELECT turn_id, MAX(total_tokens) AS max_tokens
-         FROM token_usage tu
-         WHERE turn_id IS NOT NULL ${andFilter(opts, "tu")}
-         GROUP BY turn_id
-       )) AS total_tokens,
+      -- total_tokens here is BILLABLE only (fresh_input + output + reasoning),
+      -- normalized per provider via the tokens.js semantics. We compute it
+      -- in JS below so it always agrees with cost-overview and pricing.
+      0 AS total_tokens,
       (SELECT COALESCE(AVG(duration_ms), 0) FROM turns t WHERE duration_ms IS NOT NULL ${andFilter(opts, "t", "started_at")}) AS avg_duration_ms
   `);
 
@@ -103,6 +128,10 @@ export function getOverviewMetrics(opts = {}) {
     LIMIT 12
   `);
 
+  // Replace the SQL-zero total_tokens with the canonical billable count.
+  // Doing this in JS after the totals query keeps the SQL portable and
+  // guarantees the same normalizer everywhere.
+  totals.total_tokens = billableTokensTotal(opts);
   return { totals, confidence, topSkills, topErrors, recentErrors };
 }
 
@@ -365,12 +394,12 @@ export function getComparisonMetrics(opts = {}) {
         (SELECT COUNT(*) FROM tool_events WHERE source = ${sqlString(src)}${fromAnd}${toAnd}) AS tool_calls,
         (SELECT COUNT(*) FROM tool_events WHERE source = ${sqlString(src)} AND status='failed'${fromAnd}${toAnd}) AS tool_failed,
         (SELECT COUNT(*) FROM errors WHERE source = ${sqlString(src)}${fromAnd}${toAnd}) AS errors,
-        (SELECT COALESCE(SUM(max_tokens),0) FROM (
-          SELECT turn_id, MAX(total_tokens) AS max_tokens
-          FROM token_usage WHERE source = ${sqlString(src)} AND turn_id IS NOT NULL${fromAnd}${toAnd}
-          GROUP BY turn_id
-        )) AS total_tokens
+        -- total_tokens replaced below with the canonical billable value
+        -- so this column always agrees with cost-overview + pricing.
+        0 AS total_tokens
     `);
+    // Per-source billable: pull rows for THIS source only and normalize.
+    totals.total_tokens = billableTokensBySource({ ...opts, source: src })[src] || 0;
     const topTools = queryRows(`
       SELECT tool_name, COUNT(*) AS calls,
              SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed

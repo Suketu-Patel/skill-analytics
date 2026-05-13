@@ -218,7 +218,12 @@ function FactBubble({
       className={`my-3 inline-block max-w-md transform border-l-4 ${palette[tone]} px-4 py-2 text-sm italic shadow-sm transition-transform hover:rotate-0 ${rot}`}
       style={{ borderRadius: "2px 14px 2px 14px" }}
     >
-      <span className="mr-1 not-italic">✨</span>
+      {/* small filled diamond as the AI-generated marker — restrained,
+          consistent with the rest of the dashboard's iconography */}
+      <span
+        aria-label="AI insight"
+        className="mr-2 inline-block h-2 w-2 rotate-45 align-middle bg-current opacity-60"
+      />
       {fact}
     </div>
   );
@@ -796,7 +801,7 @@ export default function CostOverviewView({
           title="Pay Haiku a tenth of a cent for fresh fact bubbles"
           className="rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
         >
-          {funLoading ? "✨ Thinking…" : "✨ Regenerate facts"}
+          {funLoading ? "Thinking…" : "Regenerate AI facts"}
         </button>
       </div>
     </section>

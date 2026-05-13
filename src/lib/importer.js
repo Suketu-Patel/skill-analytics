@@ -791,6 +791,19 @@ export function importAll(options = {}) {
 
   execSql("VACUUM;");
 
+  // Cache the Wrapped snapshot so its tab loads instantly after sync
+  // (otherwise it recomputes cost-overview + comparison from scratch on
+  // every visit). Failures are swallowed — the import itself already
+  // succeeded; the snapshot is a perf optimization, not correctness.
+  // Dynamic import keeps importer.js decoupled from the metrics layer
+  // (which itself imports from sqlite + tokens, no cycle risk).
+  import("./wrapped-cache.js")
+    .then((m) => m.precomputeWrappedSnapshot())
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("wrapped snapshot cache failed:", err?.message || err);
+    });
+
   return {
     codex: {
       skills: skills.length,

@@ -432,7 +432,10 @@ export default function DashboardClient() {
   const [query, setQuery] = useState("");
   // "cost" is the new default landing — tokens/sessions/cost are the
   // center stage after the pivot away from skill-centric analytics.
-  const [active, setActive] = useState<"cost" | "wrapped" | "overview" | "skills" | "errors" | "timeline" | "comparison" | "pricing" | "judgments">("cost");
+  // Consolidated post-pivot tab set. "overview", "errors", and "pricing"
+  // accept-but-render-as "skills" so deep links from older bookmarks
+  // still land somewhere sensible.
+  const [active, setActive] = useState<"cost" | "wrapped" | "skills" | "timeline" | "comparison" | "judgments">("cost");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string>("");
@@ -778,33 +781,38 @@ export default function DashboardClient() {
             autoSyncEnabled={autoSyncEnabled}
             onToggle={() => setAutoSyncEnabled((v) => !v)}
           />
-          {/* Only render the Update button when we've confirmed there
-              are upstream commits to pull. Tooltip lists what's new. */}
-          {updateAvailable !== null && updateAvailable > 0 && (
-            <button
-              onClick={runUpdate}
-              disabled={updating}
-              title={
-                updateCommits.length > 0
-                  ? `${updateAvailable} new commit${
-                      updateAvailable === 1 ? "" : "s"
-                    }:\n` +
-                    updateCommits
-                      .slice(0, 6)
-                      .map((c) => `  ${c.sha} ${c.subject}`)
-                      .join("\n")
-                  : `${updateAvailable} new commit${
-                      updateAvailable === 1 ? "" : "s"
-                    } available`
-              }
-              className="inline-flex h-10 items-center gap-2 rounded-md border-2 border-amber-400 bg-amber-50 px-3 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-50"
-            >
-              <span className={updating ? "inline-block animate-spin" : "animate-pulse"}>⤓</span>
-              <span>
-                {updating ? "Updating…" : `Update available (${updateAvailable})`}
-              </span>
-            </button>
-          )}
+          {/* Update button is always visible — simpler than gating on a
+              successful upstream check (which silently broke for repos
+              that aren't standalone clones, like the in-development iLit
+              copy of this code). When commits ARE available the button
+              glows amber; otherwise it's a normal button. */}
+          {(() => {
+            const hasUpdate = !!(updateAvailable && updateAvailable > 0);
+            return (
+              <button
+                onClick={runUpdate}
+                disabled={updating}
+                title={
+                  updateCommits.length > 0
+                    ? `${updateAvailable} new commit${updateAvailable === 1 ? "" : "s"}:\n` +
+                      updateCommits.slice(0, 6).map((c) => `  ${c.sha} ${c.subject}`).join("\n")
+                    : hasUpdate
+                    ? `${updateAvailable} new commits available`
+                    : "git pull --ff-only + npm install if deps changed"
+                }
+                className={
+                  hasUpdate
+                    ? "inline-flex h-10 items-center gap-2 rounded-md border-2 border-amber-400 bg-amber-50 px-3 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-50"
+                    : "inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal disabled:cursor-wait disabled:opacity-50"
+                }
+              >
+                <span className={updating ? "inline-block animate-spin" : hasUpdate ? "animate-pulse" : ""}>⤓</span>
+                <span className="hidden sm:inline">
+                  {updating ? "Updating…" : hasUpdate ? `Update (${updateAvailable})` : "Update"}
+                </span>
+              </button>
+            );
+          })()}
           <button
             onClick={loadData}
             className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal"
@@ -858,28 +866,44 @@ export default function DashboardClient() {
 
       <nav className="flex flex-wrap gap-2">
         {[
+          // Post-pivot nav: Cost & Tokens is the center stage. Wrapped
+          // is the shareable view. Comparison, Timeline, Judgments stay.
+          // Skills/Errors/Pricing collapsed into one "Skills" tab so the
+          // nav doesn't bury the cost-centric experience under legacy
+          // skill-tracking views.
           ["cost", "Cost & Tokens"],
-          ["wrapped", "✨ Wrapped"],
+          ["wrapped", "Wrapped"],
           ["comparison", "Claude vs Codex"],
           ["timeline", "Timeline"],
           ["judgments", "Judgments"],
-          ["overview", "Skill Overview"],
-          ["skills", "Skill Health"],
-          ["errors", "Errors"],
-          ["pricing", "Pricing"]
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setActive(id as typeof active)}
-            className={`h-9 rounded-md border px-3 text-sm font-medium ${
-              active === id
-                ? "border-ink bg-ink text-white"
-                : "border-line bg-white text-slate-600 hover:border-teal"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+          ["skills", "Skills"]
+        ].map(([id, label]) => {
+          // Wrapped gets a subtle gradient border + soft glow so it
+          // reads as "this is the shareable one" without resorting to
+          // an emoji in the label.
+          const isWrapped = id === "wrapped";
+          const isActive = active === id;
+          const base = "h-9 rounded-md border px-3 text-sm font-medium transition-shadow";
+          let cls = "";
+          if (isActive) {
+            cls = isWrapped
+              ? "border-violet-500 bg-gradient-to-r from-violet-700 to-fuchsia-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.35)]"
+              : "border-ink bg-ink text-white";
+          } else {
+            cls = isWrapped
+              ? "border-violet-300 bg-white text-violet-700 hover:border-violet-500 hover:shadow-[0_0_8px_rgba(168,85,247,0.25)]"
+              : "border-line bg-white text-slate-600 hover:border-teal";
+          }
+          return (
+            <button
+              key={id}
+              onClick={() => setActive(id as typeof active)}
+              className={`${base} ${cls}`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </nav>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -922,7 +946,7 @@ export default function DashboardClient() {
       )}
       {active === "wrapped" && <WrappedView filterQS={filterQS} />}
 
-      {active === "overview" && (
+      {(active === "skills" || active === "overview") && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="panel p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -1209,7 +1233,7 @@ export default function DashboardClient() {
         </section>
       )}
 
-      {active === "errors" && (
+      {active === "skills" && (
         <section className="panel overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4">
             <div>
@@ -1335,7 +1359,7 @@ export default function DashboardClient() {
       {active === "comparison" && (
         <ComparisonView data={comparison} onSelectRange={handleChartDateSelect} />
       )}
-      {active === "pricing" && <PricingView data={pricing} loading={loading} />}
+      {active === "skills" && <PricingView data={pricing} loading={loading} />}
       {active === "judgments" && <JudgmentsView />}
 
       {evidence ? (

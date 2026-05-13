@@ -72,29 +72,35 @@ export function freshInputTokens(source, tokens) {
   return Math.max(0, input - cached);
 }
 
-// Compute cost for a single (source, model, tokens) tuple. Cost arithmetic is
-// done in JS so the SQL stays simple — we only need raw token sums from sqlite.
+// Cost is derived from token counts via the canonical normalizer in
+// `tokens.js` — same fields, same semantics as every display in the UI.
+// If you find yourself summing input_tokens directly anywhere outside
+// this file, route it through normalizeRow() instead.
+import { normalizeRow } from "./tokens.js";
+
 export function computeCost(source, model, tokens) {
   const p = priceFor(source, model);
-  const cached = Number(tokens?.cached_input_tokens || 0);
-  const output = Number(tokens?.output_tokens || 0);
-  const reasoning = Number(tokens?.reasoning_output_tokens || 0);
-  const fresh = freshInputTokens(source, tokens);
+  const n = normalizeRow(source, tokens);
 
   // Reasoning tokens are billed at output rate by both providers.
-  const inputCost = (fresh / 1_000_000) * p.input;
-  const cachedCost = (cached / 1_000_000) * p.cache_read;
-  const outputCost = ((output + reasoning) / 1_000_000) * p.output;
+  const inputCost = (n.fresh_input / 1_000_000) * p.input;
+  const cachedCost = (n.cached_input / 1_000_000) * p.cache_read;
+  const outputCost = ((n.output + n.reasoning) / 1_000_000) * p.output;
 
   // What the cached chunk would have cost without caching, for the savings KPI.
-  const savedByCaching = (cached / 1_000_000) * (p.input - p.cache_read);
+  const savedByCaching = (n.cached_input / 1_000_000) * (p.input - p.cache_read);
 
   return {
     cost: inputCost + cachedCost + outputCost,
     input_cost: inputCost,
     cached_cost: cachedCost,
     output_cost: outputCost,
-    fresh_input_tokens: fresh,
+    // Expose the normalized count so callers don't recompute it.
+    fresh_input_tokens: n.fresh_input,
+    cached_input_tokens: n.cached_input,
+    output_tokens: n.output,
+    reasoning_output_tokens: n.reasoning,
+    billable_tokens: n.billable,
     saved_by_caching: savedByCaching,
     priced: p.priced,
     price: p
