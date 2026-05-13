@@ -815,6 +815,17 @@ export function importAll(options = {}) {
       console.error("wrapped snapshot cache failed:", err?.message || err);
     });
 
+  // Contributors cache — pre-warm so the About modal opens instantly
+  // rather than waiting for `gh pr list` on every click. Same dynamic-
+  // import + swallow-error pattern: the modal still works (degraded)
+  // if this fails.
+  import("./contributors-cache.js")
+    .then((m) => m.precomputeContributorsSnapshot())
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("contributors snapshot cache failed:", err?.message || err);
+    });
+
   // Generic metric cache revalidation. invalidate wipes every cached
   // /api/metrics/* row so we never serve pre-sync data; precomputeAll
   // then warms the no-filter variants + the per-project headlines so

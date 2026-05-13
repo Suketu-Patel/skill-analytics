@@ -28,7 +28,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the THEME_INIT inline script below adds
+    // a `dark` class to <html> BEFORE React hydrates so we don't get a
+    // flash-of-light-theme. SSR renders <html lang="en"> with no class,
+    // so without this flag React (correctly) flags the mismatch. The
+    // single attribute we're suppressing is the `class` on <html>;
+    // everything inside still gets normal hydration checks.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
       </head>

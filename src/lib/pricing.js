@@ -48,10 +48,54 @@ const FALLBACK = {
   codex:  PRICING.codex["gpt-5.2-codex"]
 };
 
+// Resolution order for a given (source, model):
+//   1. Validated overrides from `data/pricing-overrides.json` if present
+//      (populated by the background WebSearch validator — see
+//      src/lib/pricing-validator.js).
+//   2. The hardcoded PRICING table in this file.
+//   3. The source's FALLBACK entry.
+//
+// Reading from disk on every call would be wasteful, so we cache the
+// JSON and refresh on a 30s timer keyed by file mtime — cheap, and
+// catches updates from the validator without a restart.
+import fs from "node:fs";
+import path from "node:path";
+import { dataDir } from "./paths.js";
+
+let overridesCache = { mtime: 0, claude: {}, codex: {}, checkedAt: 0 };
+
+function loadOverrides() {
+  // Throttle the stat-then-read pattern to once every 30 seconds. The
+  // validator only updates the file once per ~24h so this is plenty.
+  const now = Date.now();
+  if (now - overridesCache.checkedAt < 30_000) return overridesCache;
+  overridesCache.checkedAt = now;
+  try {
+    const p = path.join(dataDir(), "pricing-overrides.json");
+    const stat = fs.statSync(p);
+    if (stat.mtimeMs === overridesCache.mtime) return overridesCache;
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+    overridesCache = {
+      mtime: stat.mtimeMs,
+      checkedAt: now,
+      claude: parsed?.claude || {},
+      codex: parsed?.codex || {},
+    };
+  } catch {
+    // Missing or unreadable → fall back to PRICING. Don't poison the cache.
+  }
+  return overridesCache;
+}
+
 export function priceFor(source, model) {
+  const overrides = loadOverrides();
+  const overrideTable = (source === "claude" ? overrides.claude : overrides.codex) || {};
+  if (model && overrideTable[model]) {
+    return { priced: true, source: "override", ...overrideTable[model] };
+  }
   const table = PRICING[source] || {};
-  if (model && table[model]) return { priced: true, ...table[model] };
-  return { priced: false, ...(FALLBACK[source] || FALLBACK.codex) };
+  if (model && table[model]) return { priced: true, source: "hardcoded", ...table[model] };
+  return { priced: false, source: "fallback", ...(FALLBACK[source] || FALLBACK.codex) };
 }
 
 // Normalize the "fresh input tokens" semantics across providers.

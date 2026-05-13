@@ -198,12 +198,15 @@ export default function SettingsView() {
   }
 
   function toggleTab(id: string) {
-    setHidden((prev) => {
-      const next = prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id];
-      window.localStorage.setItem(HIDDEN_TABS_KEY, JSON.stringify(next));
-      broadcastHiddenTabs(next);
-      return next;
-    });
+    // Compute the next set OUTSIDE the state updater. React updaters
+    // must be pure — dispatching a CustomEvent (which synchronously
+    // triggers DashboardClient's setHiddenTabs) from inside the
+    // updater is what produced the "Cannot update a component while
+    // rendering a different component" warning.
+    const next = hidden.includes(id) ? hidden.filter((t) => t !== id) : [...hidden, id];
+    setHidden(next);
+    window.localStorage.setItem(HIDDEN_TABS_KEY, JSON.stringify(next));
+    broadcastHiddenTabs(next);
   }
 
   function resetTabs() {
@@ -213,15 +216,16 @@ export default function SettingsView() {
   }
 
   function toggleSource(id: SourceId) {
-    setHiddenSources((prev) => {
-      const next = prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id];
-      window.localStorage.setItem(HIDDEN_SOURCES_KEY, JSON.stringify(next));
-      // Every consumer that lists sources (FilterBar pills, Comparison
-      // columns, ⌘K source picks) listens for this event and re-reads
-      // the visible set. No reload required.
-      window.dispatchEvent(new CustomEvent("dashboard:hidden-sources", { detail: next }));
-      return next;
-    });
+    // Same pattern as toggleTab — side effects out of the updater.
+    const next = hiddenSources.includes(id)
+      ? hiddenSources.filter((s) => s !== id)
+      : [...hiddenSources, id];
+    setHiddenSources(next);
+    window.localStorage.setItem(HIDDEN_SOURCES_KEY, JSON.stringify(next));
+    // Every consumer that lists sources (FilterBar pills, Comparison
+    // columns, ⌘K source picks) listens for this event and re-reads
+    // the visible set. No reload required.
+    window.dispatchEvent(new CustomEvent("dashboard:hidden-sources", { detail: next }));
   }
 
   function pickRegion(next: Region) {
@@ -496,6 +500,9 @@ export default function SettingsView() {
         </ul>
       </section>
 
+      {/* ── Pricing validation ── */}
+      <PricingValidatorPanel />
+
       {/* ── About ── */}
       <section className="panel p-5">
         <h2 className="text-lg font-semibold text-ink">About</h2>
@@ -503,14 +510,126 @@ export default function SettingsView() {
           Local-first dashboard. Everything you see is computed from{" "}
           <span className="mono text-xs">~/.claude</span> and{" "}
           <span className="mono text-xs">~/.codex</span> transcripts on this machine —
-          your usage data stays here. Two surfaces do reach out:
+          your usage data stays here. Three surfaces reach out:
           AI fun facts call{" "}
           <span className="mono text-xs">claude -p</span> (Haiku) via your existing
-          CLI auth, and the Contributors modal queries{" "}
+          CLI auth; the Contributors modal queries{" "}
           <span className="mono text-xs">gh pr list</span> against the public
-          dashboard repo to surface PR authors. Neither sends your usage data.
+          dashboard repo; and the background pricing validator uses Haiku +
+          WebSearch to keep the per-million-token rates current. None send
+          your usage data.
         </p>
       </section>
     </div>
+  );
+}
+
+// ─── pricing validator panel ────────────────────────────────────────────
+//
+// Shows when the local pricing table was last refreshed from
+// claude.com/pricing + OpenAI's docs, and lets the user force a refresh.
+// The validator runs `claude -p --allowed-tools WebSearch` in the
+// background, so this button just kicks the API route and waits.
+function PricingValidatorPanel() {
+  const [info, setInfo] = useState<{
+    last_validated_at?: string;
+    as_of?: string | null;
+    counts?: { claude: number; codex: number };
+    present?: boolean;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/pricing/validate")
+      .then((r) => r.json())
+      .then((j) => setInfo(j))
+      .catch(() => setInfo({ present: false }));
+  }, []);
+
+  function refresh() {
+    setBusy(true);
+    setMsg(null);
+    fetch("/api/pricing/validate?force=1", { method: "POST" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.ok) {
+          setMsg(j.updated ? "Prices updated." : "Already current.");
+          setInfo({
+            present: true,
+            last_validated_at: j.payload?.last_validated_at,
+            as_of: j.payload?.as_of,
+            counts: {
+              claude: Object.keys(j.payload?.claude || {}).length,
+              codex: Object.keys(j.payload?.codex || {}).length,
+            },
+          });
+        } else {
+          setMsg(j?.error || "Validation failed.");
+        }
+      })
+      .catch((e) => setMsg(String(e)))
+      .finally(() => setBusy(false));
+  }
+
+  const lastIso = info?.last_validated_at;
+  const lastAgo = lastIso
+    ? Math.max(0, Math.round((Date.now() - new Date(lastIso).getTime()) / 60000))
+    : null;
+  return (
+    <section className="panel p-5">
+      <div className="flex items-start gap-3">
+        <RefreshCw size={20} className="mt-0.5 text-teal" />
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold text-ink">Pricing accuracy</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            On every launch the dashboard quietly asks Haiku to web-search
+            current Anthropic + OpenAI pricing, and patches a local override
+            file so cost numbers stay accurate even when the hardcoded
+            defaults age. Dedupes to once per ~24h.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+            <button
+              onClick={refresh}
+              disabled={busy}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-line bg-white px-3 text-xs font-medium text-ink hover:border-teal disabled:cursor-wait disabled:opacity-60"
+            >
+              <RefreshCw size={14} className={busy ? "animate-spin" : ""} />
+              {busy ? "Validating…" : "Refresh now"}
+            </button>
+            {info?.present && (
+              <span className="text-slate-500">
+                Last checked{" "}
+                {lastAgo === 0 ? "just now" : `${lastAgo} min ago`}
+                {info.as_of && (
+                  <>
+                    {" · "}
+                    <span className="text-slate-400">claimed as-of {info.as_of}</span>
+                  </>
+                )}
+                {info.counts && (
+                  <>
+                    {" · "}
+                    <span className="text-slate-400">
+                      {info.counts.claude} Claude / {info.counts.codex} Codex models
+                    </span>
+                  </>
+                )}
+              </span>
+            )}
+            {!info?.present && (
+              <span className="text-slate-400">
+                No validation run yet — &quot;Refresh now&quot; to seed.
+              </span>
+            )}
+            {msg && (
+              <span className={msg.includes("failed") || msg.includes("Error") ? "text-coral" : "text-teal"}>
+                {msg}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

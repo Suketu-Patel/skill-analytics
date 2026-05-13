@@ -965,6 +965,26 @@ export default function DashboardClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterQS]);
 
+  // Background pricing validation. Fires once per mount; the server-side
+  // validator dedupes against any successful run in the last ~24h, so
+  // hot-reloading the page during dev doesn't burn Haiku quota. If the
+  // background run actually updates pricing, we show the "Dashboard
+  // refreshed" toast — the cost numbers may have just shifted.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      fetch("/api/pricing/validate", { method: "POST" })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j?.ok && j.updated) {
+            setJustRefreshed(true);
+            window.setTimeout(() => setJustRefreshed(false), 2200);
+          }
+        })
+        .catch(() => { /* validator failures don't affect the dashboard */ });
+    }, 2000); // small delay so the first paint isn't competing with subprocess spawn
+    return () => window.clearTimeout(t);
+  }, []);
+
   // ─── Dynamic ⌘K palette items ─────────────────────────────────────────
   //
   // Built from live state instead of hand-listed JSX. Each source
