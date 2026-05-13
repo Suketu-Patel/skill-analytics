@@ -329,6 +329,29 @@ export default function CostOverviewView({
   // we can't read it during SSR; bump on the "dashboard:region" event
   // dispatched by SettingsView so a region change refetches without a
   // full reload.
+  // Stable cwd→"Project A/B/C…" mapping, built once per data load so
+  // the same path gets the same letter across Spend-by-Project and the
+  // Most Expensive Sessions table. Used only when anonymize is on.
+  // (`anonAlias` is computed via useMemo further down once `data` is in
+  // scope — declared here so the helper is in scope for both panels.)
+
+  // Anonymize project names everywhere on the Cost view when the user
+  // (or a screenshot script) sets `localStorage["dashboard.anonymize"]
+  // = "1"`. Mirrors the Wrapped tab's existing toggle — useful when
+  // sharing screenshots without leaking real project paths.
+  // SSR-safe: starts false, hydrates in the effect below.
+  const [anonymize, setAnonymize] = useState(false);
+  useEffect(() => {
+    const read = () => {
+      try { return window.localStorage.getItem("dashboard.anonymize") === "1"; }
+      catch { return false; }
+    };
+    setAnonymize(read());
+    const onChange = () => setAnonymize(read());
+    window.addEventListener("dashboard:anonymize", onChange);
+    return () => window.removeEventListener("dashboard:anonymize", onChange);
+  }, []);
+
   const [region, setRegion] = useState<string>("US");
   useEffect(() => {
     setRegion(resolveRegion());
@@ -409,6 +432,25 @@ export default function CostOverviewView({
     () => bucketFacts(funFacts?.facts || []),
     [funFacts]
   );
+
+  // Build the cwd → "Project A/B/C…" alias once per data load. Order
+  // is byProject's existing order (highest spend first), so the
+  // top-spending project becomes "Project A" — consistent with how
+  // anyone scanning the screenshot would interpret it.
+  const anonAlias = useMemo(() => {
+    const map = new Map<string, string>();
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    (data?.byProject || []).forEach((p, i) => {
+      const letter = i < letters.length ? letters[i] : `${letters[i % 26]}${Math.floor(i / 26) + 1}`;
+      map.set(p.cwd, `Project ${letter}`);
+    });
+    return map;
+  }, [data?.byProject]);
+  const projLabel = (cwd: string | null | undefined, fallback: string) => {
+    if (!anonymize) return fallback;
+    if (!cwd) return fallback;
+    return anonAlias.get(cwd) || fallback;
+  };
   const pickFact = (theme: Theme): string | undefined => {
     const themed = factBuckets[theme];
     if (themed && themed.length > 0) return themed.shift();
@@ -710,8 +752,8 @@ export default function CostOverviewView({
               <tbody>
                 {data.byProject.map((p) => (
                   <tr key={p.cwd} className="border-t border-line">
-                    <td className="px-3 py-2 font-mono text-xs" title={p.cwd}>
-                      {p.cwd_short}
+                    <td className="px-3 py-2 font-mono text-xs" title={anonymize ? "" : p.cwd}>
+                      {projLabel(p.cwd, p.cwd_short)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{p.sessions}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{tok(p.tokens)}</td>
@@ -782,8 +824,8 @@ export default function CostOverviewView({
               {data.topSessions.map((s) => (
                 <tr key={s.turn_id} className="border-t border-line">
                   <td className="px-3 py-2 tabular-nums text-slate-600">{shortTime(s.started_at)}</td>
-                  <td className="px-3 py-2 font-mono text-xs" title={s.cwd}>
-                    {s.cwd_short}
+                  <td className="px-3 py-2 font-mono text-xs" title={anonymize ? "" : s.cwd}>
+                    {projLabel(s.cwd, s.cwd_short)}
                   </td>
                   <td className="px-3 py-2">
                     <span
