@@ -16,6 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useChartDateBrush } from "./use-chart-date-brush";
 
 // ─── data shapes ─────────────────────────────────────────────────────────
 
@@ -189,12 +190,22 @@ type FunFacts = {
   error?: string;
 };
 
-export default function CostOverviewView({ filterQS }: { filterQS: string }) {
+export default function CostOverviewView({
+  filterQS,
+  onSelectRange,
+}: {
+  filterQS: string;
+  onSelectRange?: (from: string, to: string) => void;
+}) {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [funFacts, setFunFacts] = useState<FunFacts | null>(null);
   const [funLoading, setFunLoading] = useState(false);
+  // Only the Daily Spend chart has a date X-axis. Hour-of-day and
+  // Day-of-week are categorical buckets — a "drag to filter dates"
+  // doesn't map onto them — so they don't get the brush.
+  const dailySpendBrush = useChartDateBrush(onSelectRange || (() => {}));
 
   useEffect(() => {
     let cancelled = false;
@@ -379,7 +390,14 @@ export default function CostOverviewView({ filterQS }: { filterQS: string }) {
       {/* ─── daily cost trend ──────────────────────────────────────────── */}
       <div className="panel p-4">
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold text-ink">Daily Spend</h2>
+          <h2 className="text-lg font-semibold text-ink">
+            Daily Spend
+            {onSelectRange && (
+              <span className="ml-2 text-xs font-normal text-slate-400">
+                — drag to filter
+              </span>
+            )}
+          </h2>
           <span className="text-xs text-slate-500">
             stacked: fresh input · cached input · output
           </span>
@@ -389,7 +407,7 @@ export default function CostOverviewView({ filterQS }: { filterQS: string }) {
         ) : (
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={dailyChart}>
+              <AreaChart data={dailyChart} {...dailySpendBrush.chartProps}>
                 <defs>
                   <linearGradient id="g-fresh" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#0f8f8a" stopOpacity={0.7} />
@@ -418,6 +436,7 @@ export default function CostOverviewView({ filterQS }: { filterQS: string }) {
                 <Area type="monotone" dataKey="Fresh input" stackId="1" stroke="#0f8f8a" fill="url(#g-fresh)" strokeWidth={1.5} />
                 <Area type="monotone" dataKey="Cached input" stackId="1" stroke="#6157a8" fill="url(#g-cached)" strokeWidth={1.5} />
                 <Area type="monotone" dataKey="Output" stackId="1" stroke="#d97c52" fill="url(#g-output)" strokeWidth={1.5} />
+                {dailySpendBrush.selectionOverlay()}
               </AreaChart>
             </ResponsiveContainer>
           </div>

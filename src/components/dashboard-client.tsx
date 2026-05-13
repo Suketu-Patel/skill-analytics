@@ -2,6 +2,7 @@
 
 import CostOverviewView from "./cost-overview-view";
 import JudgmentsView from "./judgments-view";
+import { useChartDateBrush } from "./use-chart-date-brush";
 import {
   Activity,
   AlertTriangle,
@@ -33,7 +34,6 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -265,90 +265,6 @@ function shortPath(value?: string) {
   const projectMarker = "/project/ilit/";
   if (value.includes(projectMarker)) return value.split(projectMarker)[1];
   return value;
-}
-
-/**
- * Hook that turns any Recharts time-series chart into a click-and-drag
- * date-range selector. Spread `chartProps` onto `<LineChart>` /
- * `<AreaChart>` / `<BarChart>`, render `selectionOverlay()` inside the
- * chart, and pass `onSelect` to receive the chosen [from, to] day pair
- * (already sorted left-to-right).
- *
- * Behavior:
- *  - mousedown on a data point records the left bound
- *  - mousemove with the button held records the right bound and renders
- *    a translucent <ReferenceArea> across the selection
- *  - mouseup with a non-empty range fires onSelect and clears overlay
- *  - leaving the chart while dragging cancels (no half-selections)
- *
- * The chart's data must have a `day` field whose values are sortable
- * strings — YYYY-MM-DD works as-is.
- */
-function useChartDateBrush(onSelect: (from: string, to: string) => void) {
-  const [left, setLeft] = useState<string | null>(null);
-  const [right, setRight] = useState<string | null>(null);
-  const isDragging = left != null;
-
-  const reset = () => {
-    setLeft(null);
-    setRight(null);
-  };
-
-  // While the user is dragging the chart, the browser would normally
-  // select all surrounding text (chart axis labels, panel headings,
-  // etc.) — the standard side-effect of any mousedown+drag. Block it at
-  // the document level for the duration of the drag.
-  useEffect(() => {
-    if (!isDragging) return;
-    const prev = document.body.style.userSelect;
-    document.body.style.userSelect = "none";
-    return () => {
-      document.body.style.userSelect = prev;
-    };
-  }, [isDragging]);
-
-  const chartProps = {
-    onMouseDown: (e: { activeLabel?: string } | null) => {
-      const lab = e?.activeLabel;
-      if (typeof lab === "string" && lab) {
-        setLeft(lab);
-        setRight(lab);
-      }
-    },
-    onMouseMove: (e: { activeLabel?: string } | null) => {
-      if (left == null) return;
-      const lab = e?.activeLabel;
-      if (typeof lab === "string" && lab) setRight(lab);
-    },
-    onMouseUp: () => {
-      if (left != null && right != null && left !== right) {
-        const [from, to] = [left, right].sort();
-        onSelect(from, to);
-      }
-      reset();
-    },
-    onMouseLeave: reset,
-    // crosshair cursor + suppress text selection at the element level
-    // too (defense-in-depth alongside the document-level guard above).
-    style: {
-      cursor: "crosshair",
-      userSelect: "none",
-      WebkitUserSelect: "none",
-    } as React.CSSProperties,
-  };
-
-  const selectionOverlay = () =>
-    left && right && left !== right ? (
-      <ReferenceArea
-        x1={left}
-        x2={right}
-        strokeOpacity={0.3}
-        fill="#0f8f8a"
-        fillOpacity={0.15}
-      />
-    ) : null;
-
-  return { chartProps, selectionOverlay };
 }
 
 function StatCard({
@@ -945,7 +861,9 @@ export default function DashboardClient() {
         />
       </section>
 
-      {active === "cost" && <CostOverviewView filterQS={filterQS} />}
+      {active === "cost" && (
+        <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} />
+      )}
 
       {active === "overview" && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
