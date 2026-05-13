@@ -1,5 +1,6 @@
 "use client";
 
+import CostOverviewView from "./cost-overview-view";
 import JudgmentsView from "./judgments-view";
 import {
   Activity,
@@ -414,6 +415,68 @@ function EmptyState({ text, loading = false }: { text: string; loading?: boolean
   );
 }
 
+/**
+ * Compact "synced N ago" indicator with a toggle for the 30-minute auto
+ * import. Lives next to the manual Import / Refresh buttons.
+ */
+function SyncStatus({
+  lastSyncedAt,
+  importing,
+  autoSyncEnabled,
+  onToggle,
+}: {
+  lastSyncedAt: number | null;
+  importing: boolean;
+  autoSyncEnabled: boolean;
+  onToggle: () => void;
+}) {
+  // Re-render the relative-time label every 30s so "synced X min ago"
+  // stays accurate without nagging the rest of the app.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const label = (() => {
+    if (importing) return "Syncing…";
+    if (!lastSyncedAt) return autoSyncEnabled ? "Auto-sync on" : "Auto-sync off";
+    const secs = Math.floor((Date.now() - lastSyncedAt) / 1000);
+    if (secs < 60) return "Synced just now";
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `Synced ${mins}m ago`;
+    return `Synced ${Math.floor(mins / 60)}h ago`;
+  })();
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={
+        autoSyncEnabled
+          ? "Auto-sync runs every 30 minutes. Click to disable."
+          : "Auto-sync disabled. Click to re-enable."
+      }
+      className={`inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-medium tabular-nums ${
+        autoSyncEnabled
+          ? "border-emerald-300 bg-emerald-50 text-emerald-800 hover:border-emerald-400"
+          : "border-line bg-white text-slate-500 hover:border-rose-400"
+      }`}
+    >
+      <span
+        className={`inline-block h-2 w-2 rounded-full ${
+          importing
+            ? "animate-pulse bg-amber-500"
+            : autoSyncEnabled
+            ? "bg-emerald-500"
+            : "bg-slate-400"
+        }`}
+      />
+      {label}
+    </button>
+  );
+}
+
 function ChartSkeleton({ height = "h-80" }: { height?: string }) {
   // Bar-chart-shaped skeleton so the panel doesn't visually collapse during refetch.
   const bars = Array.from({ length: 12 }, (_, i) => 30 + ((i * 37) % 60));
@@ -450,10 +513,19 @@ export default function DashboardClient() {
   const [errors, setErrors] = useState<ErrorRow[]>([]);
   const [timeline, setTimeline] = useState<TimelineRow[]>([]);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState<"overview" | "skills" | "errors" | "timeline" | "comparison" | "pricing" | "judgments">("overview");
+  // "cost" is the new default landing — tokens/sessions/cost are the
+  // center stage after the pivot away from skill-centric analytics.
+  const [active, setActive] = useState<"cost" | "overview" | "skills" | "errors" | "timeline" | "comparison" | "pricing" | "judgments">("cost");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string>("");
+  // Auto-sync: timestamp of the last successful import this session. Used
+  // both to display "synced X ago" and to power the 30-min interval below.
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  // Update-from-GitHub state
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<SkillCategoryFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
@@ -536,6 +608,7 @@ export default function DashboardClient() {
       const response = await fetch("/api/import", { method: "POST" });
       const body = await response.json();
       if (!body.ok) setImportError(String(body.error || "Import failed"));
+      else setLastSyncedAt(Date.now());
       await loadData();
     } catch (error) {
       setImportError(error instanceof Error ? error.message : String(error));
@@ -543,6 +616,55 @@ export default function DashboardClient() {
       setImporting(false);
     }
   }
+
+  async function runUpdate() {
+    setUpdating(true);
+    setUpdateMsg(null);
+    try {
+      const r = await fetch("/api/update", { method: "POST" });
+      const j = await r.json();
+      if (!j.ok) {
+        setUpdateMsg(
+          `${j.step || "update"} failed: ${j.error || "unknown"}${
+            j.details ? "\n" + j.details : ""
+          }`
+        );
+        return;
+      }
+      if (j.already_up_to_date) {
+        setUpdateMsg("Already up to date.");
+      } else {
+        setUpdateMsg(
+          `Pulled new commits.${
+            j.install_ran ? " Dependencies installed." : ""
+          }${j.needs_restart ? " Server restart recommended for native changes." : ""}`
+        );
+      }
+    } catch (e) {
+      setUpdateMsg(`update failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setUpdating(false);
+      // Always clear after 12s so a stale message doesn't sit there forever.
+      setTimeout(() => setUpdateMsg(null), 12_000);
+    }
+  }
+
+  // Auto-sync every 30 minutes while the tab is open. Skip if a manual
+  // import is already in flight (avoids overlapping POSTs and the
+  // associated VACUUM contention on SQLite). The setInterval is paused
+  // when the tab is hidden so we don't burn CPU while in the background.
+  useEffect(() => {
+    if (!autoSyncEnabled) return;
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+    const tick = () => {
+      if (document.hidden) return;
+      if (importing) return;
+      runImport();
+    };
+    const id = window.setInterval(tick, THIRTY_MIN_MS);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSyncEnabled, importing]);
 
   async function openEvidence(id?: string) {
     if (!id) return;
@@ -697,6 +819,21 @@ export default function DashboardClient() {
               className="h-10 w-full rounded-md border border-line bg-white pl-9 pr-3 text-sm outline-none focus:border-teal sm:w-64"
             />
           </div>
+          <SyncStatus
+            lastSyncedAt={lastSyncedAt}
+            importing={importing}
+            autoSyncEnabled={autoSyncEnabled}
+            onToggle={() => setAutoSyncEnabled((v) => !v)}
+          />
+          <button
+            onClick={runUpdate}
+            disabled={updating}
+            title="git pull --ff-only + npm install if deps changed"
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal disabled:cursor-wait disabled:opacity-50"
+          >
+            <span className={updating ? "inline-block animate-spin" : ""}>⤓</span>
+            <span className="hidden sm:inline">{updating ? "Updating" : "Update"}</span>
+          </button>
           <button
             onClick={loadData}
             className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal"
@@ -716,6 +853,16 @@ export default function DashboardClient() {
         {importError && (
           <div className="mt-2 text-xs text-rose-600" title={importError}>
             Import failed: {importError.slice(0, 200)}
+          </div>
+        )}
+        {updateMsg && (
+          <div
+            className={`mt-2 whitespace-pre-wrap text-xs ${
+              updateMsg.includes("failed") ? "text-rose-600" : "text-emerald-700"
+            }`}
+            title={updateMsg}
+          >
+            {updateMsg}
           </div>
         )}
       </header>
@@ -740,13 +887,14 @@ export default function DashboardClient() {
 
       <nav className="flex flex-wrap gap-2">
         {[
-          ["overview", "Overview"],
+          ["cost", "Cost & Tokens"],
+          ["comparison", "Claude vs Codex"],
+          ["timeline", "Timeline"],
+          ["judgments", "Judgments"],
+          ["overview", "Skill Overview"],
           ["skills", "Skill Health"],
           ["errors", "Errors"],
-          ["timeline", "Timeline"],
-          ["comparison", "Claude vs Codex"],
-          ["pricing", "Pricing"],
-          ["judgments", "Judgments"]
+          ["pricing", "Pricing"]
         ].map(([id, label]) => (
           <button
             key={id}
@@ -796,6 +944,8 @@ export default function DashboardClient() {
           loading={loading && !overview.totals}
         />
       </section>
+
+      {active === "cost" && <CostOverviewView filterQS={filterQS} />}
 
       {active === "overview" && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">

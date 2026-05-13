@@ -595,3 +595,323 @@ export function getPricingMetrics(opts = {}) {
 
   return { totals, models, daily, perSkill };
 }
+
+// ---- Cost & Tokens overview (the new dashboard center stage) -----------
+// One endpoint, many cuts of the same fundamental data: every token_usage row
+// joined to its turn, priced via the model rate card, then sliced by day,
+// hour, day-of-week, project (cwd), model, and source. Plus headline counters
+// and outlier surfacing for "where did the money actually go."
+
+function safeBasename(cwd) {
+  if (!cwd || typeof cwd !== "string") return "(unknown)";
+  // Strip trailing slash, take last 2 path components for context — gives
+  // ".../skill-analytics" rather than just "skill-analytics" when there are
+  // multiple projects with similar leaf names.
+  const trimmed = cwd.replace(/\/$/, "");
+  const parts = trimmed.split("/").filter(Boolean);
+  if (parts.length === 0) return "(unknown)";
+  if (parts.length === 1) return parts[0];
+  return `…/${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
+
+export function getCostOverview(opts = {}) {
+  const tuWhere = whereFilter(opts, "tu");
+  const tuJoinAnd = tuWhere ? ` AND ${tuWhere}` : "";
+
+  // Raw per-(day, source, model, cwd, turn) aggregates — we'll price these in
+  // JS and then re-aggregate along whichever dimension each card needs.
+  const rows = queryRows(`
+    SELECT
+      tu.timestamp AS ts,
+      substr(tu.timestamp, 1, 10) AS day,
+      strftime('%H', tu.timestamp) AS hour,
+      strftime('%w', tu.timestamp) AS dow,
+      tu.turn_id AS turn_id,
+      tu.source AS source,
+      COALESCE(t.model, '(unknown)') AS model,
+      COALESCE(t.cwd, '(unknown)') AS cwd,
+      t.started_at AS started_at,
+      t.completed_at AS completed_at,
+      t.duration_ms AS duration_ms,
+      COALESCE(tu.input_tokens, 0) AS input_tokens,
+      COALESCE(tu.cached_input_tokens, 0) AS cached_input_tokens,
+      COALESCE(tu.output_tokens, 0) AS output_tokens,
+      COALESCE(tu.reasoning_output_tokens, 0) AS reasoning_output_tokens
+    FROM token_usage tu
+    LEFT JOIN turns t ON t.turn_id = tu.turn_id
+    WHERE tu.timestamp IS NOT NULL ${tuJoinAnd}
+  `);
+
+  // Price every row up-front. Each priced row carries cost_total + the
+  // per-bucket breakdown so the slice aggregators below stay simple.
+  const priced = rows.map((r) => {
+    const c = computeCost(r.source, r.model, r);
+    return {
+      ts: r.ts,
+      day: r.day,
+      hour: Number(r.hour),
+      dow: Number(r.dow),
+      turn_id: r.turn_id,
+      source: r.source,
+      model: r.model,
+      cwd: r.cwd,
+      started_at: r.started_at,
+      completed_at: r.completed_at,
+      duration_ms: r.duration_ms,
+      input_tokens: Number(r.input_tokens),
+      cached_input_tokens: Number(r.cached_input_tokens),
+      output_tokens: Number(r.output_tokens),
+      reasoning_output_tokens: Number(r.reasoning_output_tokens),
+      cost: c.cost,
+      input_cost: c.input_cost,
+      cached_cost: c.cached_cost,
+      output_cost: c.output_cost,
+      saved_by_caching: c.saved_by_caching,
+      fresh_input_tokens: c.fresh_input_tokens
+    };
+  });
+
+  // ─── slice 1: by-day ───────────────────────────────────────────────────
+  const byDayMap = new Map();
+  for (const r of priced) {
+    const d = byDayMap.get(r.day) || {
+      day: r.day,
+      cost: 0,
+      cost_input: 0,
+      cost_cached: 0,
+      cost_output: 0,
+      tokens_input: 0,
+      tokens_cached: 0,
+      tokens_output: 0,
+      tokens_reasoning: 0,
+      sessions: new Set(),
+    };
+    d.cost += r.cost;
+    d.cost_input += r.input_cost;
+    d.cost_cached += r.cached_cost;
+    d.cost_output += r.output_cost;
+    d.tokens_input += r.fresh_input_tokens;
+    d.tokens_cached += r.cached_input_tokens;
+    d.tokens_output += r.output_tokens;
+    d.tokens_reasoning += r.reasoning_output_tokens;
+    if (r.turn_id) d.sessions.add(r.turn_id);
+    byDayMap.set(r.day, d);
+  }
+  const byDay = [...byDayMap.values()]
+    .map((d) => ({ ...d, sessions: d.sessions.size }))
+    .sort((a, b) => a.day.localeCompare(b.day));
+
+  // ─── slice 2: by-model (source-aware) ──────────────────────────────────
+  const byModelMap = new Map();
+  for (const r of priced) {
+    const key = `${r.source}::${r.model}`;
+    const m = byModelMap.get(key) || {
+      source: r.source,
+      model: r.model,
+      sessions: new Set(),
+      tokens_total: 0,
+      cost: 0,
+    };
+    m.sessions.add(r.turn_id);
+    m.tokens_total += r.fresh_input_tokens + r.cached_input_tokens + r.output_tokens + r.reasoning_output_tokens;
+    m.cost += r.cost;
+    byModelMap.set(key, m);
+  }
+  const totalSpend = byDay.reduce((acc, d) => acc + d.cost, 0);
+  const byModel = [...byModelMap.values()]
+    .map((m) => ({
+      source: m.source,
+      model: m.model,
+      sessions: m.sessions.size,
+      tokens_total: m.tokens_total,
+      cost: m.cost,
+      pct_of_total: totalSpend > 0 ? (m.cost / totalSpend) * 100 : 0,
+    }))
+    .sort((a, b) => b.cost - a.cost);
+
+  // ─── slice 3: by-project (cwd) ─────────────────────────────────────────
+  const byProjectMap = new Map();
+  for (const r of priced) {
+    const m = byProjectMap.get(r.cwd) || {
+      cwd: r.cwd,
+      cwd_short: safeBasename(r.cwd),
+      sessions: new Set(),
+      cost: 0,
+      tokens: 0,
+    };
+    m.sessions.add(r.turn_id);
+    m.cost += r.cost;
+    m.tokens += r.fresh_input_tokens + r.cached_input_tokens + r.output_tokens + r.reasoning_output_tokens;
+    byProjectMap.set(r.cwd, m);
+  }
+  const byProject = [...byProjectMap.values()]
+    .map((m) => ({ ...m, sessions: m.sessions.size }))
+    .filter((m) => m.cost > 0)
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 15);
+
+  // ─── slice 4: by-hour (0–23, UTC; user works in roughly one TZ so this
+  //                       still surfaces daily rhythm) ─────────────────────
+  const hourBuckets = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    sessions: new Set(),
+    cost: 0,
+    tokens: 0,
+  }));
+  for (const r of priced) {
+    if (Number.isInteger(r.hour) && r.hour >= 0 && r.hour < 24) {
+      const b = hourBuckets[r.hour];
+      b.sessions.add(r.turn_id);
+      b.cost += r.cost;
+      b.tokens += r.fresh_input_tokens + r.output_tokens;
+    }
+  }
+  const byHour = hourBuckets.map((b) => ({
+    hour: b.hour,
+    sessions: b.sessions.size,
+    cost: b.cost,
+    tokens: b.tokens,
+  }));
+
+  // ─── slice 5: by-day-of-week (0=Sun..6=Sat) ────────────────────────────
+  const dowNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dowBuckets = Array.from({ length: 7 }, (_, d) => ({
+    dow: d,
+    label: dowNames[d],
+    sessions: new Set(),
+    cost: 0,
+  }));
+  for (const r of priced) {
+    if (Number.isInteger(r.dow) && r.dow >= 0 && r.dow < 7) {
+      const b = dowBuckets[r.dow];
+      b.sessions.add(r.turn_id);
+      b.cost += r.cost;
+    }
+  }
+  const byDayOfWeek = dowBuckets.map((b) => ({
+    dow: b.dow,
+    label: b.label,
+    sessions: b.sessions.size,
+    cost: b.cost,
+  }));
+
+  // ─── slice 6: top sessions by cost ─────────────────────────────────────
+  const bySessionMap = new Map();
+  for (const r of priced) {
+    if (!r.turn_id) continue;
+    const s = bySessionMap.get(r.turn_id) || {
+      turn_id: r.turn_id,
+      source: r.source,
+      model: r.model,
+      cwd: r.cwd,
+      cwd_short: safeBasename(r.cwd),
+      started_at: r.started_at,
+      duration_ms: r.duration_ms,
+      cost: 0,
+      tokens_total: 0,
+    };
+    s.cost += r.cost;
+    s.tokens_total += r.fresh_input_tokens + r.cached_input_tokens + r.output_tokens + r.reasoning_output_tokens;
+    bySessionMap.set(r.turn_id, s);
+  }
+  const topSessions = [...bySessionMap.values()]
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 15);
+
+  // ─── headline counters ────────────────────────────────────────────────
+  const totalCachedTokens = priced.reduce((a, r) => a + r.cached_input_tokens, 0);
+  const totalFreshInput = priced.reduce((a, r) => a + r.fresh_input_tokens, 0);
+  const totalOutput = priced.reduce((a, r) => a + r.output_tokens, 0);
+  const totalReasoning = priced.reduce((a, r) => a + r.reasoning_output_tokens, 0);
+  const totalSaved = priced.reduce((a, r) => a + r.saved_by_caching, 0);
+  const allTokensInput = totalFreshInput + totalCachedTokens;
+  const cacheHitRate = allTokensInput > 0 ? totalCachedTokens / allTokensInput : 0;
+
+  // Today / 7d / 30d windows relative to the data's latest day so the panel
+  // is meaningful even when the user hasn't run anything in the last hour.
+  const sortedDays = byDay.map((d) => d.day).sort();
+  const latestDay = sortedDays[sortedDays.length - 1];
+  const isoNDaysBefore = (n) => {
+    if (!latestDay) return null;
+    const d = new Date(latestDay + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - n);
+    return d.toISOString().slice(0, 10);
+  };
+  const sumSince = (cutoff) =>
+    cutoff
+      ? byDay.filter((d) => d.day >= cutoff).reduce((a, d) => a + d.cost, 0)
+      : 0;
+
+  const spend7d = sumSince(isoNDaysBefore(6));
+  const spend30d = sumSince(isoNDaysBefore(29));
+  const spendToday = byDay.find((d) => d.day === latestDay)?.cost || 0;
+
+  // Most expensive single day
+  const mostExpensiveDay = byDay.reduce(
+    (best, d) => (d.cost > (best?.cost || 0) ? d : best),
+    null
+  );
+
+  // Burn alerts: days where spend > 3x the median daily spend in the window.
+  // Useful for spotting "oh wait, what happened on the 4th."
+  const costs = byDay.map((d) => d.cost).filter((c) => c > 0).sort((a, b) => a - b);
+  const medianDailyCost = costs.length ? costs[Math.floor(costs.length / 2)] : 0;
+  const burnAlerts = byDay
+    .filter((d) => medianDailyCost > 0 && d.cost > medianDailyCost * 3)
+    .map((d) => ({
+      day: d.day,
+      cost: d.cost,
+      multiple: d.cost / medianDailyCost,
+    }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 10);
+
+  // Concurrency: did Claude and Codex run on the same day? Tells the user
+  // whether they've genuinely been using both or just one.
+  const claudeDays = new Set();
+  const codexDays = new Set();
+  for (const r of priced) {
+    if (r.source === "claude") claudeDays.add(r.day);
+    if (r.source === "codex") codexDays.add(r.day);
+  }
+  const overlapDays = [...claudeDays].filter((d) => codexDays.has(d)).length;
+
+  // Per-source totals for the headline split
+  const sourceTotals = { claude: 0, codex: 0 };
+  for (const r of priced) sourceTotals[r.source] = (sourceTotals[r.source] || 0) + r.cost;
+
+  return {
+    headline: {
+      spend_total: totalSpend,
+      spend_today: spendToday,
+      spend_7d: spend7d,
+      spend_30d: spend30d,
+      sessions_total: bySessionMap.size,
+      active_days: byDay.filter((d) => d.cost > 0).length,
+      tokens_input: totalFreshInput,
+      tokens_cached: totalCachedTokens,
+      tokens_output: totalOutput,
+      tokens_reasoning: totalReasoning,
+      tokens_total: totalFreshInput + totalCachedTokens + totalOutput + totalReasoning,
+      cache_hit_rate: cacheHitRate,
+      cache_savings: totalSaved,
+      avg_session_cost: bySessionMap.size > 0 ? totalSpend / bySessionMap.size : 0,
+      most_expensive_day: mostExpensiveDay
+        ? { day: mostExpensiveDay.day, cost: mostExpensiveDay.cost }
+        : null,
+      median_daily_cost: medianDailyCost,
+      overlap_days: overlapDays,
+      claude_only_days: [...claudeDays].filter((d) => !codexDays.has(d)).length,
+      codex_only_days: [...codexDays].filter((d) => !claudeDays.has(d)).length,
+      source_split: sourceTotals,
+      latest_day: latestDay,
+    },
+    byDay,
+    byModel,
+    byProject,
+    byHour,
+    byDayOfWeek,
+    topSessions,
+    burnAlerts,
+  };
+}

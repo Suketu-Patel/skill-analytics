@@ -202,6 +202,21 @@ CREATE INDEX IF NOT EXISTS idx_tool_events_turn_status ON tool_events(turn_id, s
 CREATE INDEX IF NOT EXISTS idx_token_usage_time ON token_usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_turns_started ON turns(started_at);`);
 
+  // AI-generated fun-fact summaries, cached by content hash so we don't
+  // re-prompt Haiku on every dashboard refresh. The same headline numbers
+  // → same hash → same cached summary.
+  execSql(`
+CREATE TABLE IF NOT EXISTS summaries (
+  content_hash TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,              -- "cost_fun_facts" etc.
+  model TEXT,
+  generated_at TEXT NOT NULL,
+  payload TEXT NOT NULL            -- JSON: { facts: ["...","..."], ... }
+);
+CREATE INDEX IF NOT EXISTS idx_summaries_kind ON summaries(kind);
+CREATE INDEX IF NOT EXISTS idx_summaries_time ON summaries(generated_at);
+`);
+
   // Layer 3: LLM-as-judge verdicts. One row per (skill_event_key, judge).
   // Judges: "haiku" (Claude Code's Haiku model) and "codex" (codex exec).
   // Codex acts as a tiebreaker on cases where the Haiku judge and the
