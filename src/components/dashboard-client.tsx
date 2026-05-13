@@ -878,27 +878,40 @@ export default function DashboardClient() {
           ["judgments", "Judgments"],
           ["skills", "Skills"]
         ].map(([id, label]) => {
-          // Wrapped gets a subtle gradient border + soft glow so it
-          // reads as "this is the shareable one" without resorting to
-          // an emoji in the label.
+          // Wrapped is the marquee tab. Two constraints from the redesign:
+          //   1. Glow must be CONSTANT, not hover-only (hover-only made
+          //      it feel like a normal button with a quirky hover state).
+          //   2. When active, keep the violet identity but use a dark
+          //      text color (white-on-light-violet had poor contrast).
+          // We use inline style for the glow so arbitrary-value Tailwind
+          // doesn't have to be configured to recognize it.
           const isWrapped = id === "wrapped";
           const isActive = active === id;
-          const base = "h-9 rounded-md border px-3 text-sm font-medium transition-shadow";
+          const base =
+            "h-9 rounded-md border px-3 text-sm font-medium transition-all";
           let cls = "";
-          if (isActive) {
-            cls = isWrapped
-              ? "border-violet-500 bg-gradient-to-r from-violet-700 to-fuchsia-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.35)]"
-              : "border-ink bg-ink text-white";
+          let style: React.CSSProperties | undefined;
+          if (isWrapped) {
+            // Always glow, just brighter when active.
+            style = {
+              boxShadow: isActive
+                ? "0 0 14px rgba(168, 85, 247, 0.55)"
+                : "0 0 10px rgba(168, 85, 247, 0.35)",
+            };
+            cls = isActive
+              ? "border-violet-500 bg-violet-100 text-violet-900"
+              : "border-violet-400 bg-violet-50 text-violet-800 hover:bg-violet-100";
+          } else if (isActive) {
+            cls = "border-ink bg-ink text-white";
           } else {
-            cls = isWrapped
-              ? "border-violet-300 bg-white text-violet-700 hover:border-violet-500 hover:shadow-[0_0_8px_rgba(168,85,247,0.25)]"
-              : "border-line bg-white text-slate-600 hover:border-teal";
+            cls = "border-line bg-white text-slate-600 hover:border-teal";
           }
           return (
             <button
               key={id}
               onClick={() => setActive(id as typeof active)}
               className={`${base} ${cls}`}
+              style={style}
             >
               {label}
             </button>
