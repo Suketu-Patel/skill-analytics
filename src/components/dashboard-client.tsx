@@ -95,12 +95,13 @@ const CATEGORY_LABEL: Record<SkillCategoryFilter, string> = {
   "claude-agent": "Claude Agents"
 };
 
-type SourceFilter = "all" | "codex" | "claude";
+type SourceFilter = "all" | "codex" | "claude" | "cursor";
 
 const SOURCE_LABEL: Record<SourceFilter, string> = {
-  all: "Both",
+  all: "All",
   codex: "Codex",
-  claude: "Claude"
+  claude: "Claude",
+  cursor: "Cursor"
 };
 
 type PricingData = {
@@ -178,7 +179,8 @@ const COLORS = ["#0f8f8a", "#d55c47", "#b78318", "#6157a8", "#3f7fbc", "#6b7280"
 // Brand color tokens (also defined in tailwind.config.cjs).
 const BRAND = {
   claude: "#D97757",
-  codex: "#0D0D0D"
+  codex: "#0D0D0D",
+  cursor: "#1B6FFF"
 } as const;
 
 // Anthropic Claude mark — official brand SVG (the leftmost "sunburst" glyph
@@ -213,6 +215,21 @@ function CodexLogo({ size = 16, className = "" }: { size?: number; className?: s
       className={className}
     >
       <path d="M21.07 10.32a5.34 5.34 0 0 0-.46-4.39 5.41 5.41 0 0 0-5.82-2.59 5.4 5.4 0 0 0-9.16 1.96 5.4 5.4 0 0 0-3.61 2.62 5.4 5.4 0 0 0 .66 6.34 5.4 5.4 0 0 0 .46 4.4 5.4 5.4 0 0 0 5.82 2.6 5.4 5.4 0 0 0 9.16-1.97 5.4 5.4 0 0 0 3.61-2.62 5.4 5.4 0 0 0-.66-6.34Zm-8.06 11.27a4 4 0 0 1-2.57-.93l.13-.07 4.27-2.46a.7.7 0 0 0 .35-.6v-6.02l1.81 1.04c.02.01.03.03.04.05v4.98c0 2.21-1.81 4.01-4.03 4.01ZM4.35 17.85a4 4 0 0 1-.48-2.7l.13.08 4.27 2.46c.21.13.48.13.7 0l5.21-3v2.08c0 .02 0 .04-.03.06l-4.31 2.48a4.02 4.02 0 0 1-5.49-1.46Zm-1.13-9.4a4 4 0 0 1 2.11-1.77v5.06c0 .24.13.46.34.59l5.2 3-1.81 1.04a.06.06 0 0 1-.06 0L4.69 13.9a4.02 4.02 0 0 1-1.47-5.45Zm14.83 3.45-5.21-3.01 1.81-1.04a.06.06 0 0 1 .06 0l4.32 2.48a4.02 4.02 0 0 1-.62 7.25v-5.07c0-.24-.13-.46-.36-.6Zm1.8-2.7-.13-.07-4.26-2.49a.7.7 0 0 0-.7 0L9.55 9.65V7.57c0-.02 0-.04.02-.06l4.32-2.48a4.02 4.02 0 0 1 5.97 4.16Zm-11.3 3.71L6.74 11.86a.07.07 0 0 1-.04-.05V6.83a4.02 4.02 0 0 1 6.59-3.08l-.13.07-4.27 2.46a.7.7 0 0 0-.35.6l-.01 6.01Zm.98-2.12L11.85 9.4l2.33 1.34v2.69l-2.33 1.34-2.32-1.34Z" />
+    </svg>
+  );
+}
+
+function CursorLogo({ size = 16, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-label="Cursor"
+      className={className}
+    >
+      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
     </svg>
   );
 }
@@ -744,7 +761,7 @@ export default function DashboardClient() {
           ["skills", "Skill Health"],
           ["errors", "Errors"],
           ["timeline", "Timeline"],
-          ["comparison", "Claude vs Codex"],
+          ["comparison", "Compare"],
           ["pricing", "Pricing"],
           ["judgments", "Judgments"]
         ].map(([id, label]) => (
@@ -1988,8 +2005,9 @@ function ComparisonView({
   const tokensBrushChart = useChartDateBrush(onSelectRange || (() => {}));
   const codex = data.sources?.find((s) => s.source === "codex");
   const claude = data.sources?.find((s) => s.source === "claude");
+  const cursorSrc = data.sources?.find((s) => s.source === "cursor");
 
-  if (!codex && !claude) {
+  if (!codex && !claude && !cursorSrc) {
     return (
       <section className="panel p-8">
         <EmptyState text="Run Import Data to populate comparison" />
@@ -2009,56 +2027,63 @@ function ComparisonView({
   ];
 
   const mergeDaily = (
-    codexRows: Array<{ day: string } & Record<string, unknown>> | undefined,
-    claudeRows: Array<{ day: string } & Record<string, unknown>> | undefined,
+    sources: Array<{ key: string; rows: Array<{ day: string } & Record<string, unknown>> | undefined }>,
     valueKey: string
   ) => {
-    const merged: Record<string, { day: string; codex: number; claude: number }> = {};
-    (codexRows || []).forEach((d) => {
-      merged[d.day] = { day: d.day, codex: Number(d[valueKey] || 0), claude: 0 };
-    });
-    (claudeRows || []).forEach((d) => {
-      merged[d.day] = merged[d.day]
-        ? { ...merged[d.day], claude: Number(d[valueKey] || 0) }
-        : { day: d.day, codex: 0, claude: Number(d[valueKey] || 0) };
-    });
-    return Object.values(merged).sort((a, b) => a.day.localeCompare(b.day));
+    const merged: Record<string, Record<string, string | number>> = {};
+    for (const { key, rows } of sources) {
+      (rows || []).forEach((d) => {
+        if (!merged[d.day]) merged[d.day] = { day: d.day };
+        merged[d.day][key] = Number(d[valueKey] || 0);
+      });
+    }
+    return Object.values(merged).sort((a, b) => String(a.day).localeCompare(String(b.day)));
   };
-  const dailyMerged = mergeDaily(codex?.daily, claude?.daily, "events");
-  const tokensMerged = mergeDaily(codex?.dailyTokens, claude?.dailyTokens, "tokens");
+  const dailyMerged = mergeDaily(
+    [{ key: "codex", rows: codex?.daily }, { key: "claude", rows: claude?.daily }, { key: "cursor", rows: cursorSrc?.daily }],
+    "events"
+  );
+  const tokensMerged = mergeDaily(
+    [{ key: "codex", rows: codex?.dailyTokens }, { key: "claude", rows: claude?.dailyTokens }, { key: "cursor", rows: cursorSrc?.dailyTokens }],
+    "tokens"
+  );
 
   // Hourly cadence overlay so the user can see when each tool is most active.
   const hourlyMerged = Array.from({ length: 24 }, (_, h) => {
     const c = codex?.hourly?.find((r) => Number(r.hour) === h);
     const cl = claude?.hourly?.find((r) => Number(r.hour) === h);
+    const cu = cursorSrc?.hourly?.find((r) => Number(r.hour) === h);
     return {
       hour: `${String(h).padStart(2, "0")}h`,
       codex: c?.events || 0,
-      claude: cl?.events || 0
+      claude: cl?.events || 0,
+      cursor: cu?.events || 0
     };
   });
 
   const tokenBreakdownData = [
-    { kind: "Input", codex: codex?.tokenBreakdown?.input_tokens || 0, claude: claude?.tokenBreakdown?.input_tokens || 0 },
-    { kind: "Cached", codex: codex?.tokenBreakdown?.cached_input_tokens || 0, claude: claude?.tokenBreakdown?.cached_input_tokens || 0 },
-    { kind: "Output", codex: codex?.tokenBreakdown?.output_tokens || 0, claude: claude?.tokenBreakdown?.output_tokens || 0 },
-    { kind: "Reasoning", codex: codex?.tokenBreakdown?.reasoning_tokens || 0, claude: claude?.tokenBreakdown?.reasoning_tokens || 0 }
+    { kind: "Input", codex: codex?.tokenBreakdown?.input_tokens || 0, claude: claude?.tokenBreakdown?.input_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.input_tokens || 0 },
+    { kind: "Cached", codex: codex?.tokenBreakdown?.cached_input_tokens || 0, claude: claude?.tokenBreakdown?.cached_input_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.cached_input_tokens || 0 },
+    { kind: "Output", codex: codex?.tokenBreakdown?.output_tokens || 0, claude: claude?.tokenBreakdown?.output_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.output_tokens || 0 },
+    { kind: "Reasoning", codex: codex?.tokenBreakdown?.reasoning_tokens || 0, claude: claude?.tokenBreakdown?.reasoning_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.reasoning_tokens || 0 }
   ];
   const tokensTotalCodex = tokenBreakdownData.reduce((a, b) => a + b.codex, 0);
   const tokensTotalClaude = tokenBreakdownData.reduce((a, b) => a + b.claude, 0);
+  const tokensTotalCursor = tokenBreakdownData.reduce((a, b) => a + b.cursor, 0);
 
   return (
     <section className="flex flex-col gap-5">
       {/* Heading */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
         <SourceHeader name="Codex" totals={codex?.totals} tone="codex" />
         <SourceHeader name="Claude" totals={claude?.totals} tone="claude" />
+        <SourceHeader name="Cursor" totals={cursorSrc?.totals} tone="cursor" />
       </div>
 
       {/* Side-by-side totals table */}
       <div className="panel overflow-hidden">
         <div className="border-b border-line p-4">
-          <h2 className="text-lg font-semibold text-ink">Totals — Codex vs Claude</h2>
+          <h2 className="text-lg font-semibold text-ink">Totals — All Sources</h2>
           <p className="text-sm text-slate-500">Within the selected date range.</p>
         </div>
         <div className="overflow-x-auto">
@@ -2068,7 +2093,7 @@ function ComparisonView({
                 <th className="px-3 py-2">Metric</th>
                 <th className="px-3 py-2 text-right">Codex</th>
                 <th className="px-3 py-2 text-right">Claude</th>
-                <th className="px-3 py-2 text-right">Delta</th>
+                <th className="px-3 py-2 text-right">Cursor</th>
                 <th className="px-3 py-2">Distribution</th>
               </tr>
             </thead>
@@ -2076,8 +2101,10 @@ function ComparisonView({
               {totalKeys.map(({ key, label, fmt }) => {
                 const c = Number(codex?.totals?.[key] || 0);
                 const cl = Number(claude?.totals?.[key] || 0);
-                const total = c + cl;
+                const cu = Number(cursorSrc?.totals?.[key] || 0);
+                const total = c + cl + cu;
                 const pctCodex = total > 0 ? (c / total) * 100 : 0;
+                const pctClaude = total > 0 ? (cl / total) * 100 : 0;
                 const formatVal = (n: number) =>
                   fmt === "tokens" ? new Intl.NumberFormat("en-US").format(n) : formatNumber(n);
                 return (
@@ -2085,13 +2112,12 @@ function ComparisonView({
                     <td className="px-3 py-2 font-medium text-ink">{label}</td>
                     <td className="px-3 py-2 text-right font-semibold text-codex">{formatVal(c)}</td>
                     <td className="px-3 py-2 text-right font-semibold text-claude">{formatVal(cl)}</td>
-                    <td className={`px-3 py-2 text-right text-xs ${c > cl ? "text-codex" : cl > c ? "text-claude" : "text-slate-400"}`}>
-                      {c === cl ? "—" : c > cl ? `+${formatVal(c - cl)} codex` : `+${formatVal(cl - c)} claude`}
-                    </td>
+                    <td className="px-3 py-2 text-right font-semibold text-cursor">{formatVal(cu)}</td>
                     <td className="px-3 py-2">
                       <div className="flex h-2 w-full overflow-hidden rounded-full bg-line">
                         <div className="bg-codex" style={{ width: `${pctCodex}%` }} />
-                        <div className="bg-claude" style={{ width: `${100 - pctCodex}%` }} />
+                        <div className="bg-claude" style={{ width: `${pctClaude}%` }} />
+                        <div className="bg-cursor" style={{ width: `${100 - pctCodex - pctClaude}%` }} />
                       </div>
                     </td>
                   </tr>
@@ -2117,6 +2143,7 @@ function ComparisonView({
                 <Legend />
                 <Line type="monotone" dataKey="codex" stroke={BRAND.codex} strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="claude" stroke={BRAND.claude} strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="cursor" stroke={BRAND.cursor} strokeWidth={2} dot={false} />
                 {eventsBrush.selectionOverlay()}
               </LineChart>
             </ResponsiveContainer>
@@ -2140,6 +2167,9 @@ function ComparisonView({
             <span className="inline-flex items-center gap-1">
               <span className="h-2 w-3 rounded-full bg-claude" /> Claude {formatNumber(tokensTotalClaude)}
             </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-3 rounded-full bg-cursor" /> Cursor {formatNumber(tokensTotalCursor)}
+            </span>
           </div>
         </div>
         {tokensMerged.length ? (
@@ -2155,6 +2185,10 @@ function ComparisonView({
                     <stop offset="5%" stopColor={BRAND.claude} stopOpacity={0.5} />
                     <stop offset="95%" stopColor={BRAND.claude} stopOpacity={0} />
                   </linearGradient>
+                  <linearGradient id="g-cursor" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={BRAND.cursor} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={BRAND.cursor} stopOpacity={0} />
+                  </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
                 <XAxis dataKey="day" tick={{ fontSize: 11 }} />
@@ -2163,6 +2197,7 @@ function ComparisonView({
                 <Legend />
                 <Area type="monotone" dataKey="codex" stroke={BRAND.codex} fill="url(#g-codex)" strokeWidth={2} />
                 <Area type="monotone" dataKey="claude" stroke={BRAND.claude} fill="url(#g-claude)" strokeWidth={2} />
+                <Area type="monotone" dataKey="cursor" stroke={BRAND.cursor} fill="url(#g-cursor)" strokeWidth={2} />
                 {tokensBrushChart.selectionOverlay()}
               </AreaChart>
             </ResponsiveContainer>
@@ -2186,6 +2221,7 @@ function ComparisonView({
               <Legend />
               <Bar dataKey="codex" fill={BRAND.codex} radius={[4, 4, 0, 0]} />
               <Bar dataKey="claude" fill={BRAND.claude} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="cursor" fill={BRAND.cursor} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -2205,32 +2241,35 @@ function ComparisonView({
               <Legend />
               <Bar dataKey="codex" fill={BRAND.codex} radius={[3, 3, 0, 0]} />
               <Bar dataKey="claude" fill={BRAND.claude} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="cursor" fill={BRAND.cursor} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* Top tools side-by-side */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
         <TopList title="Top Codex Tools" tone="codex" rows={codex?.topTools || []} />
         <TopList title="Top Claude Tools" tone="claude" rows={claude?.topTools || []} />
+        <TopList title="Top Cursor Tools" tone="cursor" rows={cursorSrc?.topTools || []} />
       </div>
 
       {/* Top models side-by-side */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
         <ModelList title="Codex Models" tone="codex" rows={codex?.topModels || []} />
         <ModelList title="Claude Models" tone="claude" rows={claude?.topModels || []} />
+        <ModelList title="Cursor Models" tone="cursor" rows={cursorSrc?.topModels || []} />
       </div>
     </section>
   );
 }
 
-type BrandTone = "codex" | "claude";
+type BrandTone = "codex" | "claude" | "cursor";
 
 function brandClasses(tone: BrandTone) {
-  return tone === "claude"
-    ? { text: "text-claude", bg: "bg-claude", tint: "bg-claude-tint", border: "border-claude" }
-    : { text: "text-codex", bg: "bg-codex", tint: "bg-codex-tint", border: "border-codex" };
+  if (tone === "claude") return { text: "text-claude", bg: "bg-claude", tint: "bg-claude-tint", border: "border-claude" };
+  if (tone === "cursor") return { text: "text-cursor", bg: "bg-cursor", tint: "bg-cursor-tint", border: "border-cursor" };
+  return { text: "text-codex", bg: "bg-codex", tint: "bg-codex-tint", border: "border-codex" };
 }
 
 function SourceHeader({
@@ -2244,7 +2283,7 @@ function SourceHeader({
 }) {
   const t = totals || {};
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = tone === "claude" ? ClaudeLogo : tone === "cursor" ? CursorLogo : CodexLogo;
   return (
     <div className={`panel overflow-hidden border-2 ${cls.border}`}>
       <div className={`flex items-center justify-between px-4 py-3 ${cls.tint}`}>
@@ -2288,7 +2327,7 @@ function TopList({
   tone: BrandTone;
 }) {
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = tone === "claude" ? ClaudeLogo : tone === "cursor" ? CursorLogo : CodexLogo;
   return (
     <div className="panel p-4">
       <h3 className={`mb-3 flex items-center gap-2 text-sm font-semibold ${cls.text}`}>
@@ -2323,7 +2362,7 @@ function ModelList({
   tone: BrandTone;
 }) {
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = tone === "claude" ? ClaudeLogo : tone === "cursor" ? CursorLogo : CodexLogo;
   return (
     <div className="panel p-4">
       <h3 className={`mb-3 flex items-center gap-2 text-sm font-semibold ${cls.text}`}>

@@ -17,7 +17,9 @@ module.exports = {
         claude: "#D97757",
         "claude-tint": "#FAEEE6",
         codex: "#0D0D0D",
-        "codex-tint": "#F4F4F4"
+        "codex-tint": "#F4F4F4",
+        cursor: "#1B6FFF",
+        "cursor-tint": "#E8F0FF"
       }
     }
   },
