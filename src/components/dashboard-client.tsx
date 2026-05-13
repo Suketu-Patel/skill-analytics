@@ -3,6 +3,7 @@
 import CostOverviewView from "./cost-overview-view";
 import JudgmentsView from "./judgments-view";
 import { useChartDateBrush } from "./use-chart-date-brush";
+import WrappedView from "./wrapped-view";
 import {
   Activity,
   AlertTriangle,
@@ -431,7 +432,7 @@ export default function DashboardClient() {
   const [query, setQuery] = useState("");
   // "cost" is the new default landing — tokens/sessions/cost are the
   // center stage after the pivot away from skill-centric analytics.
-  const [active, setActive] = useState<"cost" | "overview" | "skills" | "errors" | "timeline" | "comparison" | "pricing" | "judgments">("cost");
+  const [active, setActive] = useState<"cost" | "wrapped" | "overview" | "skills" | "errors" | "timeline" | "comparison" | "pricing" | "judgments">("cost");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string>("");
@@ -439,9 +440,13 @@ export default function DashboardClient() {
   // both to display "synced X ago" and to power the 30-min interval below.
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
-  // Update-from-GitHub state
+  // Update-from-GitHub state. `available` is null when we haven't asked
+  // yet (don't show the button); a number when we know how many commits
+  // we're behind upstream; 0 when we've checked and are current.
   const [updating, setUpdating] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<number | null>(null);
+  const [updateCommits, setUpdateCommits] = useState<{ sha: string; subject: string }[]>([]);
   const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<SkillCategoryFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
@@ -556,14 +561,46 @@ export default function DashboardClient() {
           }${j.needs_restart ? " Server restart recommended for native changes." : ""}`
         );
       }
+      // Re-check availability so the button hides itself after a
+      // successful pull (no more commits to fetch).
+      checkForUpdates();
     } catch (e) {
       setUpdateMsg(`update failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setUpdating(false);
-      // Always clear after 12s so a stale message doesn't sit there forever.
       setTimeout(() => setUpdateMsg(null), 12_000);
     }
   }
+
+  async function checkForUpdates() {
+    try {
+      const r = await fetch("/api/update/check");
+      const j = await r.json();
+      if (!j.ok) {
+        // Silent — this is a background poll. Failures (no remote, not a
+        // repo, no network) shouldn't shout at the user.
+        setUpdateAvailable(null);
+        return;
+      }
+      setUpdateAvailable(j.behind_by || 0);
+      setUpdateCommits(j.commits || []);
+    } catch {
+      setUpdateAvailable(null);
+    }
+  }
+
+  // Check on mount, then every 15 minutes thereafter, and whenever the
+  // tab regains focus (covers "I left it open overnight" cases).
+  useEffect(() => {
+    checkForUpdates();
+    const id = window.setInterval(checkForUpdates, 15 * 60 * 1000);
+    const onFocus = () => checkForUpdates();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   // Auto-sync every 30 minutes while the tab is open. Skip if a manual
   // import is already in flight (avoids overlapping POSTs and the
@@ -741,15 +778,33 @@ export default function DashboardClient() {
             autoSyncEnabled={autoSyncEnabled}
             onToggle={() => setAutoSyncEnabled((v) => !v)}
           />
-          <button
-            onClick={runUpdate}
-            disabled={updating}
-            title="git pull --ff-only + npm install if deps changed"
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal disabled:cursor-wait disabled:opacity-50"
-          >
-            <span className={updating ? "inline-block animate-spin" : ""}>⤓</span>
-            <span className="hidden sm:inline">{updating ? "Updating" : "Update"}</span>
-          </button>
+          {/* Only render the Update button when we've confirmed there
+              are upstream commits to pull. Tooltip lists what's new. */}
+          {updateAvailable !== null && updateAvailable > 0 && (
+            <button
+              onClick={runUpdate}
+              disabled={updating}
+              title={
+                updateCommits.length > 0
+                  ? `${updateAvailable} new commit${
+                      updateAvailable === 1 ? "" : "s"
+                    }:\n` +
+                    updateCommits
+                      .slice(0, 6)
+                      .map((c) => `  ${c.sha} ${c.subject}`)
+                      .join("\n")
+                  : `${updateAvailable} new commit${
+                      updateAvailable === 1 ? "" : "s"
+                    } available`
+              }
+              className="inline-flex h-10 items-center gap-2 rounded-md border-2 border-amber-400 bg-amber-50 px-3 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-50"
+            >
+              <span className={updating ? "inline-block animate-spin" : "animate-pulse"}>⤓</span>
+              <span>
+                {updating ? "Updating…" : `Update available (${updateAvailable})`}
+              </span>
+            </button>
+          )}
           <button
             onClick={loadData}
             className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal"
@@ -804,6 +859,7 @@ export default function DashboardClient() {
       <nav className="flex flex-wrap gap-2">
         {[
           ["cost", "Cost & Tokens"],
+          ["wrapped", "✨ Wrapped"],
           ["comparison", "Claude vs Codex"],
           ["timeline", "Timeline"],
           ["judgments", "Judgments"],
@@ -864,6 +920,7 @@ export default function DashboardClient() {
       {active === "cost" && (
         <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} />
       )}
+      {active === "wrapped" && <WrappedView filterQS={filterQS} />}
 
       {active === "overview" && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">

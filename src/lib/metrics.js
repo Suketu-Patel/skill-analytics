@@ -876,9 +876,26 @@ export function getCostOverview(opts = {}) {
   }
   const overlapDays = [...claudeDays].filter((d) => codexDays.has(d)).length;
 
-  // Per-source totals for the headline split
+  // Per-source totals for the headline split. Track both cost and
+  // billable tokens (fresh input + output + reasoning) per source so the
+  // Wrapped cards don't have to derive them from comparison's
+  // total_tokens (which leaks cached tokens into the headline number).
   const sourceTotals = { claude: 0, codex: 0 };
-  for (const r of priced) sourceTotals[r.source] = (sourceTotals[r.source] || 0) + r.cost;
+  const sourceBillableTokens = { claude: 0, codex: 0 };
+  const sourceSessions = { claude: new Set(), codex: new Set() };
+  for (const r of priced) {
+    sourceTotals[r.source] = (sourceTotals[r.source] || 0) + r.cost;
+    sourceBillableTokens[r.source] =
+      (sourceBillableTokens[r.source] || 0) +
+      r.fresh_input_tokens +
+      r.output_tokens +
+      r.reasoning_output_tokens;
+    if (r.turn_id) sourceSessions[r.source].add(r.turn_id);
+  }
+  const sourceSessionCounts = {
+    claude: sourceSessions.claude.size,
+    codex: sourceSessions.codex.size,
+  };
 
   return {
     headline: {
@@ -892,6 +909,13 @@ export function getCostOverview(opts = {}) {
       tokens_cached: totalCachedTokens,
       tokens_output: totalOutput,
       tokens_reasoning: totalReasoning,
+      // "Billable tokens" — what Claude / Codex actually charge against
+      // your quota. Excludes cache reads (priced near zero). This is the
+      // number we surface as the headline "Tokens" figure everywhere
+      // except the Cache Effectiveness panel; including cached read
+      // tokens here would make the dashboard 95%+ "cached" and bury the
+      // useful signal.
+      tokens_billable: totalFreshInput + totalOutput + totalReasoning,
       tokens_total: totalFreshInput + totalCachedTokens + totalOutput + totalReasoning,
       cache_hit_rate: cacheHitRate,
       cache_savings: totalSaved,
@@ -904,6 +928,8 @@ export function getCostOverview(opts = {}) {
       claude_only_days: [...claudeDays].filter((d) => !codexDays.has(d)).length,
       codex_only_days: [...codexDays].filter((d) => !claudeDays.has(d)).length,
       source_split: sourceTotals,
+      source_billable_tokens: sourceBillableTokens,
+      source_sessions: sourceSessionCounts,
       latest_day: latestDay,
     },
     byDay,

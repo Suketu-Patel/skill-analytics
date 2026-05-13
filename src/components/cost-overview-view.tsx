@@ -31,6 +31,7 @@ type Headline = {
   tokens_cached: number;
   tokens_output: number;
   tokens_reasoning: number;
+  tokens_billable: number;
   tokens_total: number;
   cache_hit_rate: number;
   cache_savings: number;
@@ -151,6 +152,81 @@ const dur = (ms: number | null) => {
 
 const SRC_COLOR = { claude: "#d97c52", codex: "#0f8f8a" } as const;
 
+// ─── fun-fact router + sticky-note bubble ───────────────────────────────
+//
+// Rather than a boring "here are 5 facts" panel, individual facts get
+// pinned next to the visualization they comment on. We bucket each fact
+// by keyword and serve it from the right spot.
+
+const FACT_THEMES = {
+  cache: /\b(cach|saved|savings|prompt cache)\b/i,
+  burn: /\b(burn|worst|expensive day|spike|outlier|peak)\b/i,
+  session: /\b(session|chat|conversation|interaction)\b/i,
+  token: /\b(token|context|prompt|throughput)\b/i,
+  cost: /\b(spend|spent|cost|dollar|\$)/i,
+  model: /\b(model|opus|sonnet|haiku|gpt|codex|claude)\b/i,
+} as const;
+
+type Theme = keyof typeof FACT_THEMES;
+
+function bucketFacts(facts: string[]): Record<Theme | "any", string[]> {
+  const buckets: Record<Theme | "any", string[]> = {
+    cache: [],
+    burn: [],
+    session: [],
+    token: [],
+    cost: [],
+    model: [],
+    any: [],
+  };
+  for (const f of facts) {
+    let placed = false;
+    for (const theme of Object.keys(FACT_THEMES) as Theme[]) {
+      if (FACT_THEMES[theme].test(f)) {
+        buckets[theme].push(f);
+        placed = true;
+        break; // first match wins so each fact appears exactly once
+      }
+    }
+    if (!placed) buckets.any.push(f);
+  }
+  return buckets;
+}
+
+function FactBubble({
+  fact,
+  tone = "amber",
+  align = "left",
+}: {
+  fact: string | undefined;
+  tone?: "amber" | "teal" | "rose" | "violet" | "emerald";
+  align?: "left" | "right";
+}) {
+  if (!fact) return null;
+  // Slight rotation + colored background makes it feel like a sticky note
+  // someone slapped onto the wall, not another panel.
+  const palette: Record<string, string> = {
+    amber: "border-amber-300 bg-amber-50 text-amber-900",
+    teal: "border-teal-300 bg-teal-50 text-teal-900",
+    rose: "border-rose-300 bg-rose-50 text-rose-900",
+    violet: "border-violet-300 bg-violet-50 text-violet-900",
+    emerald: "border-emerald-300 bg-emerald-50 text-emerald-900",
+  };
+  const rot = align === "right" ? "rotate-1" : "-rotate-1";
+  return (
+    <div
+      className={`my-3 inline-block max-w-md transform border-l-4 ${palette[tone]} px-4 py-2 text-sm italic shadow-sm transition-transform hover:rotate-0 ${rot}`}
+      style={{ borderRadius: "2px 14px 2px 14px" }}
+    >
+      <span className="mr-1 not-italic">✨</span>
+      {fact}
+    </div>
+  );
+}
+
+// Tiny corner regenerate button — lives in the very-bottom footer so it
+// doesn't take up screen real estate but is still discoverable.
+
 // ─── stat tile ───────────────────────────────────────────────────────────
 
 function Tile({
@@ -258,13 +334,16 @@ export default function CostOverviewView({
     ].filter((s) => s.value > 0);
   }, [data]);
 
-  // Per-day chart series — stack input/cached/output cost.
+  // Per-day chart series — stack fresh input + output. Cached input is
+  // intentionally omitted from the stack: it's typically 95%+ of the
+  // chart volume but a tiny fraction of cost, so it crushes the useful
+  // signal. Cache contribution is surfaced separately in the Cache
+  // Effectiveness panel.
   const dailyChart = useMemo(() => {
     if (!data) return [];
     return data.byDay.map((d) => ({
       day: d.day,
       "Fresh input": Number(d.cost_input.toFixed(4)),
-      "Cached input": Number(d.cost_cached.toFixed(4)),
       Output: Number(d.cost_output.toFixed(4)),
     }));
   }, [data]);
@@ -287,6 +366,26 @@ export default function CostOverviewView({
       cost: Number(b.cost.toFixed(4)),
     }));
   }, [data]);
+
+  // Route each AI fact to the visualization it's most relevant to.
+  // `pick(theme)` consumes from the bucket (so the same fact isn't
+  // duplicated elsewhere) and falls back to the "any" bucket if the
+  // themed bucket is empty.
+  const factBuckets = useMemo(
+    () => bucketFacts(funFacts?.facts || []),
+    [funFacts]
+  );
+  const pickFact = (theme: Theme): string | undefined => {
+    const themed = factBuckets[theme];
+    if (themed && themed.length > 0) return themed.shift();
+    return factBuckets.any.shift();
+  };
+  // Pre-pluck in render-order so the JSX below stays clean.
+  const factForDaily = pickFact("cost");
+  const factForCache = pickFact("cache");
+  const factForBurn = pickFact("burn");
+  const factForModel = pickFact("model");
+  const factForSessions = pickFact("session");
 
   if (loading && !data) {
     return (
@@ -331,61 +430,17 @@ export default function CostOverviewView({
           emphasis
         />
         <Tile
-          label="Tokens (total)"
-          value={tok(h.tokens_total)}
+          label="Billable tokens"
+          value={tok(h.tokens_billable)}
           hint={`${tok(h.tokens_input)} input · ${tok(h.tokens_output)} output${
             h.tokens_reasoning ? ` · ${tok(h.tokens_reasoning)} reasoning` : ""
-          }`}
+          }${h.tokens_cached ? ` · ${tok(h.tokens_cached)} cached (separately)` : ""}`}
         />
       </div>
 
-      {/* ─── AI fun facts panel ──────────────────────────────────────── */}
-      <div className="panel relative overflow-hidden border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-4">
-        <div className="mb-2 flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold text-amber-900">
-            ✨ Reality Check
-            <span className="ml-2 text-xs font-normal text-amber-700">
-              AI-generated, slightly sarcastic
-            </span>
-          </h2>
-          <button
-            type="button"
-            disabled={funLoading}
-            onClick={() => loadFunFacts(true)}
-            title="Pay Haiku a tenth of a cent for a fresh take"
-            className="rounded-md border border-amber-300 bg-white/60 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-white disabled:opacity-50"
-          >
-            {funLoading ? "Thinking…" : "↻ Regenerate"}
-          </button>
-        </div>
-        {funFacts?.error ? (
-          <div className="text-sm text-rose-700">
-            Couldn&apos;t generate: {funFacts.error}.
-            <span className="ml-1 text-xs text-slate-600">
-              (Needs the <code>claude</code> CLI on PATH.)
-            </span>
-          </div>
-        ) : !funFacts || !funFacts.facts || funFacts.facts.length === 0 ? (
-          <div className="text-sm text-amber-800">
-            {funLoading ? "Asking Haiku for hot takes…" : "No facts yet."}
-          </div>
-        ) : (
-          <ul className="space-y-2 text-sm text-slate-800">
-            {funFacts.facts.map((f, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-amber-600">▸</span>
-                <span>{f}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {funFacts?.generated_at && (
-          <div className="mt-3 text-[10px] text-amber-700">
-            {funFacts.cached ? "Cached" : "Fresh"} · {funFacts.model || "haiku"} ·{" "}
-            {new Date(funFacts.generated_at).toLocaleString()}
-          </div>
-        )}
-      </div>
+      {/* AI facts are no longer a top-of-page panel. They're routed by
+          theme to FactBubble callouts sprinkled near the visualization
+          they comment on. See pickFact() below. */}
 
       {/* ─── daily cost trend ──────────────────────────────────────────── */}
       <div className="panel p-4">
@@ -399,7 +454,7 @@ export default function CostOverviewView({
             )}
           </h2>
           <span className="text-xs text-slate-500">
-            stacked: fresh input · cached input · output
+            fresh input + output · cached shown in Cache panel
           </span>
         </div>
         {dailyChart.length === 0 ? (
@@ -434,13 +489,13 @@ export default function CostOverviewView({
                 />
                 <Legend />
                 <Area type="monotone" dataKey="Fresh input" stackId="1" stroke="#0f8f8a" fill="url(#g-fresh)" strokeWidth={1.5} />
-                <Area type="monotone" dataKey="Cached input" stackId="1" stroke="#6157a8" fill="url(#g-cached)" strokeWidth={1.5} />
                 <Area type="monotone" dataKey="Output" stackId="1" stroke="#d97c52" fill="url(#g-output)" strokeWidth={1.5} />
                 {dailySpendBrush.selectionOverlay()}
               </AreaChart>
             </ResponsiveContainer>
           </div>
         )}
+        <FactBubble fact={factForDaily} tone="amber" />
       </div>
 
       {/* ─── source split + cache panel ───────────────────────────────── */}
@@ -523,6 +578,7 @@ export default function CostOverviewView({
               </div>
             )}
           </div>
+          <FactBubble fact={factForCache} tone="emerald" align="right" />
         </div>
 
         <div className="panel p-4">
@@ -545,6 +601,7 @@ export default function CostOverviewView({
               ))}
             </ul>
           )}
+          <FactBubble fact={factForBurn} tone="rose" />
         </div>
       </div>
 
@@ -555,6 +612,11 @@ export default function CostOverviewView({
             <h2 className="text-lg font-semibold text-ink">Spend by Model</h2>
             <p className="text-xs text-slate-500">where the dollars go</p>
           </div>
+          {factForModel && (
+            <div className="border-b border-line px-4 py-2">
+              <FactBubble fact={factForModel} tone="violet" />
+            </div>
+          )}
           {data.byModel.length === 0 ? (
             <div className="p-6 text-sm text-slate-500">No data</div>
           ) : (
@@ -675,6 +737,11 @@ export default function CostOverviewView({
         <div className="border-b border-line p-4">
           <h2 className="text-lg font-semibold text-ink">Most Expensive Sessions</h2>
           <p className="text-xs text-slate-500">single sessions ranked by spend</p>
+          {factForSessions && (
+            <div className="mt-2">
+              <FactBubble fact={factForSessions} tone="teal" />
+            </div>
+          )}
         </div>
         {data.topSessions.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">No data</div>
@@ -715,12 +782,23 @@ export default function CostOverviewView({
       </div>
 
       {/* ─── footer note ───────────────────────────────────────────── */}
-      <p className="px-1 text-xs text-slate-500">
-        Spend computed by applying the model rate card in <code>src/lib/pricing.js</code> to the
-        token sums in <code>token_usage</code>. Cache &quot;savings&quot; = what the cached input
-        would have cost at the fresh-input rate. UTC timestamps; hour-of-day reflects when the
-        message landed in the transcript, not your wall clock.
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-3 px-1 text-xs text-slate-500">
+        <p className="max-w-3xl">
+          Spend computed by applying the model rate card in <code>src/lib/pricing.js</code> to the
+          token sums in <code>token_usage</code>. Cache &quot;savings&quot; = what the cached input
+          would have cost at the fresh-input rate. UTC timestamps; hour-of-day reflects when the
+          message landed in the transcript, not your wall clock.
+        </p>
+        <button
+          type="button"
+          disabled={funLoading}
+          onClick={() => loadFunFacts(true)}
+          title="Pay Haiku a tenth of a cent for fresh fact bubbles"
+          className="rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+        >
+          {funLoading ? "✨ Thinking…" : "✨ Regenerate facts"}
+        </button>
+      </div>
     </section>
   );
 }
