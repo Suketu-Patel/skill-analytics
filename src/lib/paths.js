@@ -16,6 +16,16 @@ export function codexHome() {
   return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 }
 
+// Cursor (the IDE) keeps its composer-session state in a per-user
+// VSCode-style appdata directory. Mac path baked in; override via
+// CURSOR_HOME for Linux/Windows or non-default installs.
+export function cursorHome() {
+  return (
+    process.env.CURSOR_HOME ||
+    path.join(os.homedir(), "Library", "Application Support", "Cursor")
+  );
+}
+
 export function dataDir() {
   return process.env.SKILL_ANALYTICS_DATA_DIR || path.join(appRoot(), "data");
 }

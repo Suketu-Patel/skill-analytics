@@ -1,7 +1,10 @@
 "use client";
 
 import CostOverviewView from "./cost-overview-view";
+import GlobalFooter from "./global-footer";
+import { ALL_SOURCES, readHiddenSources, type SourceId } from "./settings-view";
 import JudgmentsView from "./judgments-view";
+import SettingsView from "./settings-view";
 import { useChartDateBrush } from "./use-chart-date-brush";
 import {
   CommandPalette,
@@ -102,12 +105,13 @@ const CATEGORY_LABEL: Record<SkillCategoryFilter, string> = {
   "claude-agent": "Claude Agents"
 };
 
-type SourceFilter = "all" | "codex" | "claude";
+type SourceFilter = "all" | "codex" | "claude" | "cursor";
 
 const SOURCE_LABEL: Record<SourceFilter, string> = {
-  all: "Both",
+  all: "All",
   codex: "Codex",
-  claude: "Claude"
+  claude: "Claude",
+  cursor: "Cursor"
 };
 
 type PricingData = {
@@ -185,7 +189,8 @@ const COLORS = ["#0f8f8a", "#d55c47", "#b78318", "#6157a8", "#3f7fbc", "#6b7280"
 // Brand color tokens (also defined in tailwind.config.cjs).
 const BRAND = {
   claude: "#D97757",
-  codex: "#0D0D0D"
+  codex: "#0D0D0D",
+  cursor: "#1B6FFF"
 } as const;
 
 // Anthropic Claude mark — official brand SVG (the leftmost "sunburst" glyph
@@ -224,6 +229,22 @@ function CodexLogo({ size = 16, className = "" }: { size?: number; className?: s
   );
 }
 
+// Cursor IDE mark — generic cursor/stack glyph, used to badge cursor rows.
+function CursorLogo({ size = 16, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-label="Cursor"
+      className={className}
+    >
+      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
 // Tiny inline source badge shown next to skill / error rows so the eye can
 // instantly tell which agent produced the row.
 function SourceBadge({ source }: { source?: string | null }) {
@@ -238,6 +259,13 @@ function SourceBadge({ source }: { source?: string | null }) {
     return (
       <span className="inline-flex items-center gap-1 rounded bg-codex-tint px-1.5 py-0.5 text-[10px] font-semibold text-codex">
         <CodexLogo size={10} /> Codex
+      </span>
+    );
+  }
+  if (source === "cursor") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-cursor-tint px-1.5 py-0.5 text-[10px] font-semibold text-cursor">
+        <CursorLogo size={10} /> Cursor
       </span>
     );
   }
@@ -440,7 +468,95 @@ export default function DashboardClient() {
   // Consolidated post-pivot tab set. "overview", "errors", and "pricing"
   // accept-but-render-as "skills" so deep links from older bookmarks
   // still land somewhere sensible.
-  const [active, setActive] = useState<"cost" | "wrapped" | "skills" | "timeline" | "comparison" | "judgments">("cost");
+  const [active, setActive] = useState<"cost" | "wrapped" | "skills" | "timeline" | "comparison" | "judgments" | "settings">("cost");
+  // Tabs the user has hidden from the Settings tab. Settings itself can
+  // never be hidden — it's the user's escape hatch back to visibility.
+  //
+  // Must start as [] on both server and client. Lazy-reading localStorage
+  // here would render a different nav on hydrate (server sees all tabs,
+  // client sees the filtered set) and trigger a hydration mismatch. We
+  // hydrate from localStorage in the effect below; the user briefly sees
+  // all tabs for one paint, then the hidden ones disappear — acceptable.
+  const [hiddenTabs, setHiddenTabs] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("dashboard.hiddenTabs");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setHiddenTabs(parsed.filter((s) => typeof s === "string"));
+        }
+      }
+    } catch { /* localStorage blocked → keep [] */ }
+    // Settings broadcasts hidden-tab changes via a CustomEvent so we
+    // don't have to lift the state up or use context.
+    const onChange = (e: Event) => {
+      const next = (e as CustomEvent<string[]>).detail;
+      if (Array.isArray(next)) setHiddenTabs(next);
+    };
+    window.addEventListener("dashboard:hidden-tabs", onChange);
+    return () => window.removeEventListener("dashboard:hidden-tabs", onChange);
+  }, []);
+  // If the user hides the currently-active tab from Settings, bump them
+  // to "cost" (always allowed) or "settings" if even cost is hidden.
+  useEffect(() => {
+    if (active !== "settings" && hiddenTabs.includes(active)) {
+      setActive(hiddenTabs.includes("cost") ? "settings" : "cost");
+    }
+  }, [hiddenTabs, active]);
+
+  // Per-source visibility. Mirrors the Settings → Sources toggles, with
+  // the same SSR-safe init pattern (start empty → hydrate in effect).
+  // Consumers (FilterBar pills, Comparison columns, ⌘K source picks)
+  // all read from `visibleSources` below.
+  const [hiddenSources, setHiddenSources] = useState<SourceId[]>([]);
+  useEffect(() => {
+    setHiddenSources(readHiddenSources());
+    const onChange = (e: Event) => {
+      const next = (e as CustomEvent<SourceId[]>).detail;
+      if (Array.isArray(next)) setHiddenSources(next);
+    };
+    window.addEventListener("dashboard:hidden-sources", onChange);
+    return () => window.removeEventListener("dashboard:hidden-sources", onChange);
+  }, []);
+  const visibleSourceIds = useMemo(
+    () => ALL_SOURCES.filter((s) => !hiddenSources.includes(s)),
+    [hiddenSources]
+  );
+  // If the user hides the currently-selected source, snap back to "all"
+  // so they're not staring at a confusingly empty filtered view.
+  useEffect(() => {
+    if (sourceFilter !== "all" && hiddenSources.includes(sourceFilter as SourceId)) {
+      setSourceFilter("all");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hiddenSources]);
+
+  // Single source of truth for the tab nav. Both the rendered buttons
+  // and the digit-shortcut map derive from this list, so hiding a tab
+  // from Settings re-numbers everything consistently — pressing "5"
+  // jumps to whatever sits in position 5 right now, never to a tab the
+  // user can't see.
+  const ALL_TABS: Array<[typeof active, string]> = [
+    ["cost", "Cost & Tokens"],
+    ["wrapped", "Wrapped"],
+    ["comparison", "Claude vs Codex"],
+    ["timeline", "Timeline"],
+    ["judgments", "Judgments"],
+    ["skills", "Skills"],
+    ["settings", "Settings"],
+  ];
+  const visibleTabs = useMemo(
+    () => ALL_TABS.filter(([id]) => id === "settings" || !hiddenTabs.includes(id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hiddenTabs]
+  );
+  // Inside the Skills tab: four focused subviews so the page isn't a
+  // four-section vertical scroll. The 'top' subview is the eye-candy
+  // (bar charts of busiest skills + hourly cadence); Health is the
+  // detailed table; Errors is the failures stream; Pricing is the cost
+  // breakdown per skill.
+  const [skillsSubtab, setSkillsSubtab] = useState<"top" | "health" | "errors" | "pricing">("top");
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string>("");
@@ -448,6 +564,35 @@ export default function DashboardClient() {
   // both to display "synced X ago" and to power the 30-min interval below.
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  // User-configurable auto-sync cadence in minutes. Read from
+  // localStorage post-mount to avoid an SSR/client hydration mismatch
+  // (server has no localStorage → falls back to the default). 0 = off.
+  // SettingsView writes the value and dispatches "dashboard:sync-interval"
+  // so this state stays in sync without coupling the two components.
+  const [syncIntervalMin, setSyncIntervalMin] = useState<number>(30);
+  // Bumped after every successful import. Child views that load their
+  // own data (CostOverviewView, WrappedView) use it as a useEffect dep
+  // to silently refetch without flashing skeletons — the old data stays
+  // on screen until the new fetch resolves.
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  // One-shot "just refreshed" toast. Shown for ~2s after a sync
+  // completes so the user knows the screen they're looking at is fresh.
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("dashboard.syncIntervalMinutes");
+      if (raw != null) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) setSyncIntervalMin(n <= 0 ? 0 : Math.max(10, Math.round(n)));
+      }
+    } catch { /* keep default */ }
+    const onChange = (e: Event) => {
+      const next = (e as CustomEvent<number>).detail;
+      if (typeof next === "number") setSyncIntervalMin(next);
+    };
+    window.addEventListener("dashboard:sync-interval", onChange);
+    return () => window.removeEventListener("dashboard:sync-interval", onChange);
+  }, []);
   // Update-from-GitHub state. `available` is null when we haven't asked
   // yet (don't show the button); a number when we know how many commits
   // we're behind upstream; 0 when we've checked and are current.
@@ -460,7 +605,26 @@ export default function DashboardClient() {
   // Project scope: when set to a cwd string, EVERY endpoint call gets
   // &project=<cwd> appended, so cost / wrapped / comparison / etc. all
   // re-scope to just that project. Cleared via the dismiss chip below.
+  // Initial value comes from ?project= in the URL on first mount, so
+  // scoped views are shareable / bookmarkable. Must init to null on both
+  // server and client — reading window.location during render would
+  // produce mismatched HTML when SSR returns null and the client returns
+  // the URL value. Hydrated in the effect below.
   const [projectScope, setProjectScope] = useState<string | null>(null);
+  useEffect(() => {
+    const fromUrl = new URL(window.location.href).searchParams.get("project");
+    if (fromUrl) setProjectScope(fromUrl);
+  }, []);
+
+  // Mirror projectScope back into the URL whenever it changes so reloads
+  // preserve scope and the address bar always reflects the current view.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (projectScope) url.searchParams.set("project", projectScope);
+    else url.searchParams.delete("project");
+    window.history.replaceState(null, "", url.toString());
+  }, [projectScope]);
   // List of project cwds we know about — populated from cost-overview's
   // byProject list so the ⌘K palette can offer them.
   const [knownProjects, setKnownProjects] = useState<{ cwd: string; cwd_short: string; cost: number }[]>([]);
@@ -510,8 +674,13 @@ export default function DashboardClient() {
   const activityBrush = useChartDateBrush(handleChartDateSelect);
   const tokenBrush = useChartDateBrush(handleChartDateSelect);
 
-  async function loadData() {
-    setLoading(true);
+  // `silent: true` keeps the existing data visible while a refetch is in
+  // flight. We only flip the loading flag when we have nothing to show
+  // (cold start). Background syncs use silent=true so panels don't
+  // flash skeletons during auto-import — the new data swaps in
+  // atomically when the parallel fetches resolve.
+  async function loadData({ silent = false }: { silent?: boolean } = {}) {
+    if (!silent) setLoading(true);
     try {
       const safeJson = async (url: string) => {
         try {
@@ -543,7 +712,7 @@ export default function DashboardClient() {
       setComparison(comparisonBody || {});
       setPricing(pricingBody || {});
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -553,9 +722,25 @@ export default function DashboardClient() {
     try {
       const response = await fetch("/api/import", { method: "POST" });
       const body = await response.json();
-      if (!body.ok) setImportError(String(body.error || "Import failed"));
-      else setLastSyncedAt(Date.now());
-      await loadData();
+      if (!body.ok) {
+        setImportError(String(body.error || "Import failed"));
+        // Failed import → don't swap visible data; user still sees the
+        // previous (still-valid) snapshot. Bail without refetching.
+        return;
+      }
+      setLastSyncedAt(Date.now());
+      // Silent refresh: old data stays mounted, new data arrives in one
+      // batch when fetches resolve. This is the "zero-downtime" swap —
+      // no skeleton flash, no flicker between the two snapshots.
+      await loadData({ silent: true });
+      // Tell child views (CostOverviewView, WrappedView) that the
+      // underlying numbers changed so they can silently refetch too.
+      setRefreshNonce((n) => n + 1);
+      // Briefly surface a "just refreshed" toast — gives the user a
+      // visible confirmation that the screen they're looking at now
+      // reflects the latest data, instead of leaving them wondering.
+      setJustRefreshed(true);
+      window.setTimeout(() => setJustRefreshed(false), 2200);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -679,14 +864,15 @@ export default function DashboardClient() {
   // Disabled when the user is typing in an input / textarea so we don't
   // hijack normal text editing.
   useEffect(() => {
-    const tabsByDigit: Record<string, typeof active> = {
-      "1": "cost",
-      "2": "wrapped",
-      "3": "comparison",
-      "4": "timeline",
-      "5": "judgments",
-      "6": "skills",
-    };
+    // Digit shortcuts mirror the *visible* tab order. Hiding "Judgments"
+    // in Settings means "5" now jumps to whatever tab took its slot
+    // (Skills if both still visible, Settings if not). The map is
+    // recomputed on every keymap-effect re-run, so changes from Settings
+    // propagate immediately.
+    const tabsByDigit: Record<string, typeof active> = {};
+    visibleTabs.slice(0, 9).forEach(([id], i) => {
+      tabsByDigit[String(i + 1)] = id;
+    });
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const inField =
@@ -716,6 +902,28 @@ export default function DashboardClient() {
         }
         return;
       }
+      // Esc closes the topmost dismissible. Order matters — modals first,
+      // then the project scope chip. Modals install their own listeners too
+      // (for the cases where they own nested state like confirmFix), but
+      // having the global fallback means Esc is wired consistently no matter
+      // which surface is focused.
+      if (e.key === "Escape") {
+        if (evidence) {
+          e.preventDefault();
+          setEvidence(null);
+          return;
+        }
+        if (skillDetailName) {
+          e.preventDefault();
+          setSkillDetailName(null);
+          return;
+        }
+        if (projectScope) {
+          e.preventDefault();
+          setProjectScope(null);
+          return;
+        }
+      }
       if (tabsByDigit[e.key]) {
         e.preventDefault();
         setActive(tabsByDigit[e.key]);
@@ -724,24 +932,27 @@ export default function DashboardClient() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, importing]);
+  }, [active, importing, projectScope, evidence, skillDetailName, visibleTabs]);
 
-  // Auto-sync every 30 minutes while the tab is open. Skip if a manual
-  // import is already in flight (avoids overlapping POSTs and the
-  // associated VACUUM contention on SQLite). The setInterval is paused
-  // when the tab is hidden so we don't burn CPU while in the background.
+  // Auto-sync at the user-configured cadence while the tab is open.
+  // Skip if a manual import is already in flight (avoids overlapping
+  // POSTs and the associated VACUUM contention on SQLite). The
+  // setInterval is paused when the tab is hidden so we don't burn CPU
+  // in the background. syncIntervalMin === 0 means the user disabled
+  // auto-sync from Settings; the manual Import button still works.
   useEffect(() => {
     if (!autoSyncEnabled) return;
-    const THIRTY_MIN_MS = 30 * 60 * 1000;
+    if (syncIntervalMin <= 0) return;
+    const periodMs = Math.max(10, syncIntervalMin) * 60 * 1000;
     const tick = () => {
       if (document.hidden) return;
       if (importing) return;
       runImport();
     };
-    const id = window.setInterval(tick, THIRTY_MIN_MS);
+    const id = window.setInterval(tick, periodMs);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSyncEnabled, importing]);
+  }, [autoSyncEnabled, importing, syncIntervalMin]);
 
   async function openEvidence(id?: string) {
     if (!id) return;
@@ -753,6 +964,186 @@ export default function DashboardClient() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterQS]);
+
+  // ─── Dynamic ⌘K palette items ─────────────────────────────────────────
+  //
+  // Built from live state instead of hand-listed JSX. Each source
+  // (visible tabs, settings actions, source filter, region picks, date
+  // presets, projects, skills, panel anchors, top sessions) appends to
+  // one array under its own group header. Hidden tabs (Settings →
+  // Visible Tabs) are absent because we read straight from
+  // `visibleTabs`. Adding a new dynamic surface = adding one block here
+  // rather than touching <CommandPalette> internals.
+  const paletteItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      group: string;
+      label: string;
+      hint?: string;
+      onPick: () => void;
+    }> = [];
+
+    // — Tabs (filtered to visible). Digit shortcut shown as hint mirrors
+    //   the same source the nav numbering uses, so they always agree.
+    visibleTabs.forEach(([id, label], i) => {
+      items.push({
+        id: `tab-${id}`,
+        group: "Tab",
+        label,
+        hint: String(i + 1),
+        onPick: () => setActive(id),
+      });
+    });
+
+    // — Settings actions. Theme picks + sync-interval presets + region
+    //   picks all jump to Settings and broadcast their value via the
+    //   same CustomEvent the SettingsView listens to, so toggles take
+    //   effect without forcing a tab change.
+    const writeSetting = (key: string, value: string, event: string) => {
+      try {
+        window.localStorage.setItem(key, value);
+        window.dispatchEvent(new CustomEvent(event, { detail: value }));
+      } catch { /* localStorage blocked → no-op */ }
+    };
+    items.push(
+      { id: "settings-open", group: "Settings", label: "Open Settings…", hint: "7", onPick: () => setActive("settings") },
+      { id: "settings-theme-light", group: "Settings", label: "Theme: Light", onPick: () => {
+        writeSetting("dashboard.theme", "light", "dashboard:theme");
+        document.documentElement.classList.remove("dark");
+      } },
+      { id: "settings-theme-dark", group: "Settings", label: "Theme: Dark", onPick: () => {
+        writeSetting("dashboard.theme", "dark", "dashboard:theme");
+        document.documentElement.classList.add("dark");
+      } },
+      { id: "settings-theme-system", group: "Settings", label: "Theme: System", onPick: () => {
+        writeSetting("dashboard.theme", "system", "dashboard:theme");
+        const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      } },
+    );
+
+    // — Region picks (drives AI fun-fact metaphors).
+    (["US", "IN", "UK", "EU", "JP", "AU", "GLOBAL"] as const).forEach((r) => {
+      items.push({
+        id: `region-${r}`,
+        group: "Region",
+        label: `Region: ${r}`,
+        onPick: () => {
+          window.localStorage.setItem("dashboard.region", r);
+          window.dispatchEvent(new CustomEvent("dashboard:region", { detail: r }));
+        },
+      });
+    });
+
+    // — Source filter picks. Mirrors the FilterBar pills, gated to the
+    //   sources the user actually opted into (Settings → Sources). "All"
+    //   stays available even when sources are hidden — it just resolves
+    //   to "all visible" when consumers honor visibleSourceIds.
+    (Object.keys(SOURCE_LABEL) as SourceFilter[])
+      .filter((s) => s === "all" || !hiddenSources.includes(s as SourceId))
+      .forEach((s) => {
+        items.push({
+          id: `source-${s}`,
+          group: "Source filter",
+          label: `Source: ${SOURCE_LABEL[s]}`,
+          onPick: () => setSourceFilter(s),
+        });
+      });
+
+    // — Sync-interval presets.
+    [10, 15, 30, 60, 120].forEach((m) => {
+      items.push({
+        id: `sync-${m}`,
+        group: "Sync interval",
+        label: `Auto-sync every ${m} min`,
+        onPick: () => writeSetting("dashboard.syncIntervalMinutes", String(m), "dashboard:sync-interval"),
+      });
+    });
+    items.push({
+      id: "sync-off",
+      group: "Sync interval",
+      label: "Auto-sync off",
+      onPick: () => writeSetting("dashboard.syncIntervalMinutes", "0", "dashboard:sync-interval"),
+    });
+
+    // — Date range presets. Wire to the same setters the GlobalDateRange uses.
+    const presetDays = (days: number) => {
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - days + 1);
+      setDateFrom(from.toISOString().slice(0, 10));
+      setDateTo(to.toISOString().slice(0, 10));
+    };
+    items.push(
+      { id: "date-7d", group: "Date range", label: "Last 7 days", onPick: () => presetDays(7) },
+      { id: "date-30d", group: "Date range", label: "Last 30 days", onPick: () => presetDays(30) },
+      { id: "date-90d", group: "Date range", label: "Last 90 days", onPick: () => presetDays(90) },
+      { id: "date-clear", group: "Date range", label: "Clear date filter", onPick: () => { setDateFrom(""); setDateTo(""); } },
+    );
+
+    // — Project scope. "Show all" only when scoped (otherwise noise).
+    if (projectScope) {
+      items.push({
+        id: "project-all",
+        group: "Project",
+        label: "← Show all projects (clear scope)",
+        hint: "Esc",
+        onPick: () => { setProjectScope(null); setActive("cost"); },
+      });
+    }
+    knownProjects.forEach((p) => {
+      items.push({
+        id: `project-${p.cwd}`,
+        group: "Project",
+        label: p.cwd_short,
+        hint: `$${Math.round(p.cost).toLocaleString()}`,
+        onPick: () => { setProjectScope(p.cwd); setActive("cost"); },
+      });
+    });
+
+    // — Panel anchors inside the Cost & Tokens view. Picking jumps to
+    //   that tab and scrolls the anchor into view via location.hash.
+    [
+      ["daily-spend", "Cost: Daily Spend"],
+      ["claude-vs-codex", "Cost: Claude vs Codex"],
+      ["cache-effectiveness", "Cost: Cache Effectiveness"],
+      ["burn-alerts", "Cost: Burn Alerts"],
+      ["spend-by-model", "Cost: Spend by Model"],
+      ["spend-by-project", "Cost: Spend by Project"],
+      ["hour-of-day", "Cost: Hour of Day"],
+      ["top-sessions", "Cost: Most Expensive Sessions"],
+    ].forEach(([anchor, label]) => {
+      items.push({
+        id: `anchor-${anchor}`,
+        group: "Panel",
+        label,
+        onPick: () => {
+          setActive("cost");
+          // Defer to next tick so the cost panel mounts before we scroll.
+          window.setTimeout(() => {
+            const el = document.getElementById(anchor);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            history.replaceState(null, "", `#${anchor}`);
+          }, 80);
+        },
+      });
+    });
+
+    // — Skills (capped at 30 to keep the palette snappy; query
+    //   narrows further).
+    skills.slice(0, 30).forEach((s) => {
+      items.push({
+        id: `skill-${s.name}`,
+        group: "Skill",
+        label: s.name,
+        hint: s.kind || undefined,
+        onPick: () => { setActive("skills"); setSkillDetailName(s.name); },
+      });
+    });
+
+    return items;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTabs, knownProjects, skills, projectScope, hiddenSources]);
 
   const filteredSkills = useMemo(() => {
     const text = query.trim().toLowerCase();
@@ -868,6 +1259,27 @@ export default function DashboardClient() {
       {loading && (
         <div className="fixed inset-x-0 top-0 z-40">
           <div className="loader-bar" />
+        </div>
+      )}
+      {/* Background-sync indicator. While `importing` is true we render
+          a slim teal pulse at the very top so the user knows new data
+          is being pulled — without dimming the existing dashboard
+          (zero-downtime swap). After the sync resolves, the
+          `justRefreshed` toast confirms the screen reflects fresh data. */}
+      {importing && !loading && (
+        <div className="fixed inset-x-0 top-0 z-40">
+          <div className="loader-bar" />
+        </div>
+      )}
+      {justRefreshed && (
+        <div
+          className="fixed right-4 top-4 z-50 flex items-center gap-2 rounded-md border border-teal bg-teal px-3 py-1.5 text-xs font-semibold text-white shadow-lg"
+          role="status"
+          aria-live="polite"
+          style={{ animation: "fade-in-out 2.2s ease both" }}
+        >
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-white" />
+          Dashboard refreshed
         </div>
       )}
       <header className="flex flex-col gap-4 border-b border-line pb-5 lg:flex-row lg:items-end lg:justify-between">
@@ -987,31 +1399,34 @@ export default function DashboardClient() {
           <button
             type="button"
             onClick={() => setProjectScope(null)}
-            title="Clear scope (⌘K → All projects)"
+            title="Clear scope (or press Esc)"
             className="shrink-0 rounded-md border border-teal bg-white px-2.5 py-1 text-xs font-medium text-teal hover:bg-teal hover:text-white"
           >
-            ✕ Clear
+            ✕ Clear (Esc)
           </button>
         </div>
       )}
+
+      {/* Global date-range bar. Centralized here so every tab — Cost,
+          Wrapped, Comparison, Timeline, Skills — picks up the same
+          ?from/?to via filterQS. Used to live inside the Skills FilterBar,
+          which made it look like a Skills-only control even though every
+          endpoint honors it. */}
+      <GlobalDateRange
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onDateFrom={setDateFrom}
+        onDateTo={setDateTo}
+      />
 
       <nav
         className="flex flex-wrap gap-2"
         aria-label="Dashboard sections (1–6 to jump)"
       >
-        {[
-          // Post-pivot nav: Cost & Tokens is the center stage. Wrapped
-          // is the shareable view. Comparison, Timeline, Judgments stay.
-          // Skills/Errors/Pricing collapsed into one "Skills" tab so the
-          // nav doesn't bury the cost-centric experience under legacy
-          // skill-tracking views.
-          ["cost", "Cost & Tokens"],
-          ["wrapped", "Wrapped"],
-          ["comparison", "Claude vs Codex"],
-          ["timeline", "Timeline"],
-          ["judgments", "Judgments"],
-          ["skills", "Skills"]
-        ].map(([id, label], i) => {
+        {/* Derived from the visibleTabs memo so the digit shortcuts and
+            the rendered buttons always agree on order — pressing "5"
+            jumps to whatever tab is sitting at index 4 right now. */}
+        {visibleTabs.map(([id, label], i) => {
           const isWrapped = id === "wrapped";
           const isActive = active === id;
           const base =
@@ -1052,6 +1467,11 @@ export default function DashboardClient() {
         })}
       </nav>
 
+      {/* Skill-totals row (incl. the coral Errors card) — only shown on
+          the Skills tab. Used to sit above every tab, which made Errors
+          the first thing a user saw on Cost / Wrapped / Comparison etc.
+          The cost pivot moved that real estate to cost headlines. */}
+      {active === "skills" && (
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Active Skills"
@@ -1086,11 +1506,12 @@ export default function DashboardClient() {
           loading={loading && !overview.totals}
         />
       </section>
+      )}
 
       {active === "cost" && (
-        <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} />
+        <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} refreshNonce={refreshNonce} />
       )}
-      {active === "wrapped" && <WrappedView filterQS={filterQS} />}
+      {active === "wrapped" && <WrappedView filterQS={filterQS} refreshNonce={refreshNonce} />}
 
       {active === "skills" && (
         <div className="flex flex-col gap-3">
@@ -1118,20 +1539,39 @@ export default function DashboardClient() {
             project={projectFilter}
             hideUnused={hideUnused}
             source={sourceFilter}
-            dateFrom={dateFrom}
-            dateTo={dateTo}
+            hiddenSources={hiddenSources}
             onCategory={setCategoryFilter}
             onProject={setProjectFilter}
             onHideUnused={setHideUnused}
             onSource={setSourceFilter}
-            onDateFrom={setDateFrom}
-            onDateTo={setDateTo}
             filteredCount={filteredSkills.length}
           />
+          {/* Sub-nav so the four big skill panels don't dogpile onto one
+              endless scroll. Each pill swaps in one section at a time. */}
+          <div className="flex flex-wrap gap-2">
+            {([
+              ["top", "Top Skills"],
+              ["health", "Skill Health"],
+              ["errors", "Errors"],
+              ["pricing", "Pricing"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setSkillsSubtab(id)}
+                className={`h-8 rounded-md border px-3 text-xs font-medium transition ${
+                  skillsSubtab === id
+                    ? "border-teal bg-teal text-white"
+                    : "border-line bg-white text-slate-600 hover:border-teal"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
-      {(active === "skills" || active === "overview") && (
+      {((active === "skills" && skillsSubtab === "top") || active === "overview") && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="panel p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -1347,7 +1787,7 @@ export default function DashboardClient() {
         </section>
       )}
 
-      {active === "skills" && (
+      {active === "skills" && skillsSubtab === "health" && (
         <section className="panel overflow-hidden">
           <div className="flex items-center justify-between border-b border-line p-4">
             <div>
@@ -1418,7 +1858,7 @@ export default function DashboardClient() {
         </section>
       )}
 
-      {active === "skills" && (
+      {active === "skills" && skillsSubtab === "errors" && (
         <section className="panel overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4">
             <div>
@@ -1542,10 +1982,13 @@ export default function DashboardClient() {
       )}
 
       {active === "comparison" && (
-        <ComparisonView data={comparison} onSelectRange={handleChartDateSelect} />
+        <ComparisonView data={comparison} onSelectRange={handleChartDateSelect} visibleSources={visibleSourceIds} />
       )}
-      {active === "skills" && <PricingView data={pricing} loading={loading} />}
+      {active === "skills" && skillsSubtab === "pricing" && (
+        <PricingView data={pricing} loading={loading} />
+      )}
       {active === "judgments" && <JudgmentsView />}
+      {active === "settings" && <SettingsView />}
 
       {evidence ? (
         <EvidenceModal evidence={evidence} onClose={() => setEvidence(null)} />
@@ -1568,56 +2011,10 @@ export default function DashboardClient() {
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
-        items={[
-          { id: "tab-cost", group: "Tab", label: "Cost & Tokens", hint: "1", onPick: () => setActive("cost") },
-          { id: "tab-wrapped", group: "Tab", label: "Wrapped", hint: "2", onPick: () => setActive("wrapped") },
-          { id: "tab-comparison", group: "Tab", label: "Claude vs Codex", hint: "3", onPick: () => setActive("comparison") },
-          { id: "tab-timeline", group: "Tab", label: "Timeline", hint: "4", onPick: () => setActive("timeline") },
-          { id: "tab-judgments", group: "Tab", label: "Judgments", hint: "5", onPick: () => setActive("judgments") },
-          { id: "tab-skills", group: "Tab", label: "Skills", hint: "6", onPick: () => setActive("skills") },
-          // "All projects" shortcut to clear an active scope — only
-          // shown when actually scoped, so it doesn't add noise.
-          ...(projectScope
-            ? [{
-                id: "project-all",
-                group: "Project" as const,
-                label: "← Show all projects (clear scope)",
-                hint: "esc scope",
-                onPick: () => {
-                  setProjectScope(null);
-                  setActive("cost");
-                },
-              }]
-            : []),
-          // Every known project becomes a palette entry. Picking one
-          // re-scopes the entire dashboard to that cwd.
-          ...knownProjects.map((p) => ({
-            id: `project-${p.cwd}`,
-            group: "Project" as const,
-            label: p.cwd_short,
-            hint: `$${Math.round(p.cost).toLocaleString()}`,
-            onPick: () => {
-              setProjectScope(p.cwd);
-              // Jump to Cost view so the scoped data is immediately
-              // visible — easy to tell something changed.
-              setActive("cost");
-            },
-          })),
-          // Skills as palette entries — click jumps to Skills + opens
-          // that skill's detail modal.
-          ...skills.slice(0, 30).map((s) => ({
-            id: `skill-${s.name}`,
-            group: "Skill" as const,
-            label: s.name,
-            hint: s.kind || undefined,
-            onPick: () => {
-              setActive("skills");
-              setSkillDetailName(s.name);
-            },
-          })),
-        ]}
+        items={paletteItems}
       />
       <MilestoneConfetti snapshot={milestoneSnap} />
+      <GlobalFooter />
     </main>
   );
 }
@@ -1786,38 +2183,21 @@ function EvidenceModal({ evidence, onClose }: { evidence: Record<string, unknown
   );
 }
 
-function FilterBar({
-  skills,
-  projects,
-  category,
-  project,
-  hideUnused,
-  source,
+// Global date-range bar. Lives above the tab nav because every metric
+// endpoint accepts ?from=&to=, not just the Skills-tab ones — Cost,
+// Comparison, Timeline, Wrapped and Skills all read the same filterQS.
+// Kept compact (single row) so it doesn't eat real estate, and hides
+// itself entirely when no range is set + collapses to a single pill.
+function GlobalDateRange({
   dateFrom,
   dateTo,
-  onCategory,
-  onProject,
-  onHideUnused,
-  onSource,
   onDateFrom,
   onDateTo,
-  filteredCount
 }: {
-  skills: SkillRow[];
-  projects: string[];
-  category: SkillCategoryFilter;
-  project: string;
-  hideUnused: boolean;
-  source: SourceFilter;
   dateFrom: string;
   dateTo: string;
-  onCategory: (v: SkillCategoryFilter) => void;
-  onProject: (v: string) => void;
-  onHideUnused: (v: boolean) => void;
-  onSource: (v: SourceFilter) => void;
   onDateFrom: (v: string) => void;
   onDateTo: (v: string) => void;
-  filteredCount: number;
 }) {
   const presetRange = (days: number) => {
     const to = new Date();
@@ -1826,20 +2206,120 @@ function FilterBar({
     onDateFrom(from.toISOString().slice(0, 10));
     onDateTo(to.toISOString().slice(0, 10));
   };
+  const active = !!(dateFrom || dateTo);
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs ${
+        active
+          ? "border-teal/50 bg-teal/5"
+          : "border-line bg-white"
+      }`}
+      role="group"
+      aria-label="Date range filter (applies to every tab)"
+    >
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Date range
+      </span>
+      <input
+        type="date"
+        value={dateFrom}
+        onChange={(e) => onDateFrom(e.target.value)}
+        className="h-8 rounded-md border border-line bg-white px-2 text-xs outline-none focus:border-teal"
+        aria-label="From date"
+      />
+      <span className="text-slate-400">→</span>
+      <input
+        type="date"
+        value={dateTo}
+        onChange={(e) => onDateTo(e.target.value)}
+        className="h-8 rounded-md border border-line bg-white px-2 text-xs outline-none focus:border-teal"
+        aria-label="To date"
+      />
+      <div className="flex flex-wrap gap-1">
+        {[
+          { label: "7d", days: 7 },
+          { label: "30d", days: 30 },
+          { label: "90d", days: 90 },
+        ].map((p) => (
+          <button
+            key={p.label}
+            onClick={() => presetRange(p.days)}
+            className="h-8 rounded-md border border-line bg-white px-2 text-xs font-medium text-slate-600 hover:border-teal"
+          >
+            {p.label}
+          </button>
+        ))}
+        {active && (
+          <button
+            onClick={() => {
+              onDateFrom("");
+              onDateTo("");
+            }}
+            className="h-8 rounded-md border border-line bg-white px-2 text-xs font-medium text-coral hover:border-coral"
+            title="Clear date range"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {active && (
+        <span className="ml-auto text-[10px] font-medium text-teal">
+          filters every tab
+        </span>
+      )}
+    </div>
+  );
+}
+
+function FilterBar({
+  skills,
+  projects,
+  category,
+  project,
+  hideUnused,
+  source,
+  hiddenSources,
+  onCategory,
+  onProject,
+  onHideUnused,
+  onSource,
+  filteredCount
+}: {
+  skills: SkillRow[];
+  projects: string[];
+  category: SkillCategoryFilter;
+  project: string;
+  hideUnused: boolean;
+  source: SourceFilter;
+  hiddenSources: SourceId[];
+  onCategory: (v: SkillCategoryFilter) => void;
+  onProject: (v: string) => void;
+  onHideUnused: (v: boolean) => void;
+  onSource: (v: SourceFilter) => void;
+  filteredCount: number;
+}) {
+  // The date range used to live here too, but it filters every metric
+  // endpoint — not just the Skills views — so it now sits in a global
+  // <GlobalDateRange /> bar above the tab content. Keeping FilterBar to
+  // genuinely skill-scoped controls (category / project / hide-unused).
   return (
     <div className="panel flex flex-col gap-3 p-3 sm:p-4">
-      {/* Row 1: source toggle + date range */}
+      {/* Row 1: source toggle */}
       <div className="flex flex-wrap items-center gap-2 sm:gap-3">
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Source</span>
         <div className="flex flex-wrap gap-1.5">
-          {(Object.keys(SOURCE_LABEL) as SourceFilter[]).map((key) => {
+          {(Object.keys(SOURCE_LABEL) as SourceFilter[])
+            .filter((key) => key === "all" || !hiddenSources.includes(key as SourceId))
+            .map((key) => {
             const active = source === key;
             const activeColor =
               key === "claude"
                 ? "border-claude bg-claude text-white"
                 : key === "codex"
                   ? "border-codex bg-codex text-white"
-                  : "border-ink bg-ink text-white";
+                  : key === "cursor"
+                    ? "border-cursor bg-cursor text-white"
+                    : "border-ink bg-ink text-white";
             return (
               <button
                 key={key}
@@ -1850,54 +2330,11 @@ function FilterBar({
               >
                 {key === "claude" && <ClaudeLogo size={12} className={active ? "" : "text-claude"} />}
                 {key === "codex" && <CodexLogo size={12} className={active ? "" : "text-codex"} />}
+                {key === "cursor" && <CursorLogo size={12} className={active ? "" : "text-cursor"} />}
                 {SOURCE_LABEL[key]}
               </button>
             );
           })}
-        </div>
-        <span className="mx-2 hidden h-5 w-px bg-line sm:block" />
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Range</span>
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => onDateFrom(e.target.value)}
-          className="h-8 rounded-md border border-line bg-white px-2 text-xs outline-none focus:border-teal"
-          aria-label="From date"
-        />
-        <span className="text-xs text-slate-400">→</span>
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => onDateTo(e.target.value)}
-          className="h-8 rounded-md border border-line bg-white px-2 text-xs outline-none focus:border-teal"
-          aria-label="To date"
-        />
-        <div className="flex flex-wrap gap-1">
-          {[
-            { label: "7d", days: 7 },
-            { label: "30d", days: 30 },
-            { label: "90d", days: 90 }
-          ].map((p) => (
-            <button
-              key={p.label}
-              onClick={() => presetRange(p.days)}
-              className="h-8 rounded-md border border-line bg-white px-2 text-xs font-medium text-slate-600 hover:border-teal"
-            >
-              {p.label}
-            </button>
-          ))}
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => {
-                onDateFrom("");
-                onDateTo("");
-              }}
-              className="h-8 rounded-md border border-line bg-white px-2 text-xs font-medium text-coral hover:border-coral"
-              title="Clear date range"
-            >
-              Clear
-            </button>
-          )}
         </div>
       </div>
       {/* Row 2: category + project + hide unused */}
@@ -2034,6 +2471,22 @@ function SkillDetailModal({
   const [diagnoseState, setDiagnoseState] = useState<"idle" | "analyzing" | "fixing">("idle");
   const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
   const [confirmFix, setConfirmFix] = useState<"codex" | "claude" | null>(null);
+
+  // Esc precedence inside this modal: if the nested confirm overlay is up,
+  // Esc closes that first; otherwise the global handler closes the modal.
+  // We use capture+stopPropagation so we win the race with the global one.
+  useEffect(() => {
+    if (!confirmFix) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setConfirmFix(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [confirmFix]);
 
   async function runDiagnose(agent: "codex" | "claude", mode: "analyze" | "fix") {
     setDiagnoseState(mode === "fix" ? "fixing" : "analyzing");
@@ -2367,18 +2820,29 @@ function DetailMetric({ label, value, tone = "ink" }: { label: string; value: st
 function ComparisonView({
   data,
   onSelectRange,
+  visibleSources,
 }: {
   data: ComparisonData;
   onSelectRange?: (from: string, to: string) => void;
+  visibleSources: SourceId[];
 }) {
   // No-op fallback so the hook contract is satisfied even when parent
   // doesn't wire a setter (e.g. preview / storybook usage).
   const eventsBrush = useChartDateBrush(onSelectRange || (() => {}));
   const tokensBrushChart = useChartDateBrush(onSelectRange || (() => {}));
-  const codex = data.sources?.find((s) => s.source === "codex");
-  const claude = data.sources?.find((s) => s.source === "claude");
+  // Source data is gated by Settings → Sources. Hiding cursor here
+  // means: cursorSrc resolves to undefined, every chart's cursor
+  // <Line>/<Area>/<Bar> renders to null, the SourceHeader / ModelList
+  // columns drop out, and the totals table's Cursor column hides. The
+  // grids re-flow to 2 columns automatically via showCursor checks.
+  const showCodex = visibleSources.includes("codex");
+  const showClaude = visibleSources.includes("claude");
+  const showCursor = visibleSources.includes("cursor");
+  const codex = showCodex ? data.sources?.find((s) => s.source === "codex") : undefined;
+  const claude = showClaude ? data.sources?.find((s) => s.source === "claude") : undefined;
+  const cursorSrc = showCursor ? data.sources?.find((s) => s.source === "cursor") : undefined;
 
-  if (!codex && !claude) {
+  if (!codex && !claude && !cursorSrc) {
     return (
       <section className="panel p-8">
         <EmptyState text="Run Import Data to populate comparison" />
@@ -2397,57 +2861,66 @@ function ComparisonView({
     { key: "total_tokens", label: "Tokens", fmt: "tokens" }
   ];
 
+  // 3-way merge (codex/claude/cursor). Each source contributes its
+  // own per-day rows; we widen the row schema to one column per source
+  // and zero-fill the gaps so Recharts can plot all three lines.
   const mergeDaily = (
-    codexRows: Array<{ day: string } & Record<string, unknown>> | undefined,
-    claudeRows: Array<{ day: string } & Record<string, unknown>> | undefined,
+    sources: Array<{ key: string; rows: Array<{ day: string } & Record<string, unknown>> | undefined }>,
     valueKey: string
   ) => {
-    const merged: Record<string, { day: string; codex: number; claude: number }> = {};
-    (codexRows || []).forEach((d) => {
-      merged[d.day] = { day: d.day, codex: Number(d[valueKey] || 0), claude: 0 };
-    });
-    (claudeRows || []).forEach((d) => {
-      merged[d.day] = merged[d.day]
-        ? { ...merged[d.day], claude: Number(d[valueKey] || 0) }
-        : { day: d.day, codex: 0, claude: Number(d[valueKey] || 0) };
-    });
-    return Object.values(merged).sort((a, b) => a.day.localeCompare(b.day));
+    const merged: Record<string, Record<string, string | number>> = {};
+    for (const { key, rows } of sources) {
+      (rows || []).forEach((d) => {
+        if (!merged[d.day]) merged[d.day] = { day: d.day };
+        merged[d.day][key] = Number(d[valueKey] || 0);
+      });
+    }
+    return Object.values(merged).sort((a, b) => String(a.day).localeCompare(String(b.day)));
   };
-  const dailyMerged = mergeDaily(codex?.daily, claude?.daily, "events");
-  const tokensMerged = mergeDaily(codex?.dailyTokens, claude?.dailyTokens, "tokens");
+  const dailyMerged = mergeDaily(
+    [{ key: "codex", rows: codex?.daily }, { key: "claude", rows: claude?.daily }, { key: "cursor", rows: cursorSrc?.daily }],
+    "events"
+  );
+  const tokensMerged = mergeDaily(
+    [{ key: "codex", rows: codex?.dailyTokens }, { key: "claude", rows: claude?.dailyTokens }, { key: "cursor", rows: cursorSrc?.dailyTokens }],
+    "tokens"
+  );
 
-  // Hourly cadence overlay so the user can see when each tool is most active.
-  const hourlyMerged = Array.from({ length: 24 }, (_, h) => {
-    const c = codex?.hourly?.find((r) => Number(r.hour) === h);
-    const cl = claude?.hourly?.find((r) => Number(r.hour) === h);
-    return {
-      hour: `${String(h).padStart(2, "0")}h`,
-      codex: c?.events || 0,
-      claude: cl?.events || 0
-    };
-  });
-
+  // hourlyMerged removed alongside the "When You Use Each Tool" chart.
+  // tokenBreakdownData stays — its sole remaining job is to feed the
+  // per-source totals shown as legend chips on the area chart above.
   const tokenBreakdownData = [
-    { kind: "Input", codex: codex?.tokenBreakdown?.input_tokens || 0, claude: claude?.tokenBreakdown?.input_tokens || 0 },
-    { kind: "Cached", codex: codex?.tokenBreakdown?.cached_input_tokens || 0, claude: claude?.tokenBreakdown?.cached_input_tokens || 0 },
-    { kind: "Output", codex: codex?.tokenBreakdown?.output_tokens || 0, claude: claude?.tokenBreakdown?.output_tokens || 0 },
-    { kind: "Reasoning", codex: codex?.tokenBreakdown?.reasoning_tokens || 0, claude: claude?.tokenBreakdown?.reasoning_tokens || 0 }
+    { kind: "Input", codex: codex?.tokenBreakdown?.input_tokens || 0, claude: claude?.tokenBreakdown?.input_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.input_tokens || 0 },
+    { kind: "Cached", codex: codex?.tokenBreakdown?.cached_input_tokens || 0, claude: claude?.tokenBreakdown?.cached_input_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.cached_input_tokens || 0 },
+    { kind: "Output", codex: codex?.tokenBreakdown?.output_tokens || 0, claude: claude?.tokenBreakdown?.output_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.output_tokens || 0 },
+    { kind: "Reasoning", codex: codex?.tokenBreakdown?.reasoning_tokens || 0, claude: claude?.tokenBreakdown?.reasoning_tokens || 0, cursor: cursorSrc?.tokenBreakdown?.reasoning_tokens || 0 }
   ];
   const tokensTotalCodex = tokenBreakdownData.reduce((a, b) => a + b.codex, 0);
   const tokensTotalClaude = tokenBreakdownData.reduce((a, b) => a + b.claude, 0);
+  const tokensTotalCursor = tokenBreakdownData.reduce((a, b) => a + b.cursor, 0);
 
   return (
     <section className="flex flex-col gap-5">
-      {/* Heading */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <SourceHeader name="Codex" totals={codex?.totals} tone="codex" />
-        <SourceHeader name="Claude" totals={claude?.totals} tone="claude" />
+      {/* Heading. Grid flexes to the count of visible sources so hiding
+       *  cursor doesn't leave an empty third column. */}
+      <div
+        className={`grid gap-3 ${
+          visibleSources.length === 1
+            ? "sm:grid-cols-1"
+            : visibleSources.length === 2
+              ? "sm:grid-cols-2"
+              : "sm:grid-cols-3"
+        }`}
+      >
+        {showCodex && <SourceHeader name="Codex" totals={codex?.totals} tone="codex" />}
+        {showClaude && <SourceHeader name="Claude" totals={claude?.totals} tone="claude" />}
+        {showCursor && <SourceHeader name="Cursor" totals={cursorSrc?.totals} tone="cursor" />}
       </div>
 
-      {/* Side-by-side totals table */}
+      {/* Side-by-side totals table — Codex / Claude / Cursor */}
       <div className="panel overflow-hidden">
         <div className="border-b border-line p-4">
-          <h2 className="text-lg font-semibold text-ink">Totals — Codex vs Claude</h2>
+          <h2 className="text-lg font-semibold text-ink">Totals — All Sources</h2>
           <p className="text-sm text-slate-500">Within the selected date range.</p>
         </div>
         <div className="overflow-x-auto">
@@ -2455,32 +2928,40 @@ function ComparisonView({
             <thead className="bg-surface text-left text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-3 py-2">Metric</th>
-                <th className="px-3 py-2 text-right">Codex</th>
-                <th className="px-3 py-2 text-right">Claude</th>
-                <th className="px-3 py-2 text-right">Delta</th>
+                {showCodex && <th className="px-3 py-2 text-right">Codex</th>}
+                {showClaude && <th className="px-3 py-2 text-right">Claude</th>}
+                {showCursor && <th className="px-3 py-2 text-right">Cursor</th>}
                 <th className="px-3 py-2">Distribution</th>
               </tr>
             </thead>
             <tbody>
               {totalKeys.map(({ key, label, fmt }) => {
-                const c = Number(codex?.totals?.[key] || 0);
-                const cl = Number(claude?.totals?.[key] || 0);
-                const total = c + cl;
+                const c = showCodex ? Number(codex?.totals?.[key] || 0) : 0;
+                const cl = showClaude ? Number(claude?.totals?.[key] || 0) : 0;
+                const cu = showCursor ? Number(cursorSrc?.totals?.[key] || 0) : 0;
+                const total = c + cl + cu;
                 const pctCodex = total > 0 ? (c / total) * 100 : 0;
+                const pctClaude = total > 0 ? (cl / total) * 100 : 0;
+                const pctCursor = total > 0 ? (cu / total) * 100 : 0;
                 const formatVal = (n: number) =>
                   fmt === "tokens" ? new Intl.NumberFormat("en-US").format(n) : formatNumber(n);
                 return (
                   <tr key={key} className="border-t border-line">
                     <td className="px-3 py-2 font-medium text-ink">{label}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-codex">{formatVal(c)}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-claude">{formatVal(cl)}</td>
-                    <td className={`px-3 py-2 text-right text-xs ${c > cl ? "text-codex" : cl > c ? "text-claude" : "text-slate-400"}`}>
-                      {c === cl ? "—" : c > cl ? `+${formatVal(c - cl)} codex` : `+${formatVal(cl - c)} claude`}
-                    </td>
+                    {showCodex && (
+                      <td className="px-3 py-2 text-right font-semibold text-codex">{formatVal(c)}</td>
+                    )}
+                    {showClaude && (
+                      <td className="px-3 py-2 text-right font-semibold text-claude">{formatVal(cl)}</td>
+                    )}
+                    {showCursor && (
+                      <td className="px-3 py-2 text-right font-semibold text-cursor">{formatVal(cu)}</td>
+                    )}
                     <td className="px-3 py-2">
                       <div className="flex h-2 w-full overflow-hidden rounded-full bg-line">
-                        <div className="bg-codex" style={{ width: `${pctCodex}%` }} />
-                        <div className="bg-claude" style={{ width: `${100 - pctCodex}%` }} />
+                        {showCodex && <div className="bg-codex" style={{ width: `${pctCodex}%` }} />}
+                        {showClaude && <div className="bg-claude" style={{ width: `${pctClaude}%` }} />}
+                        {showCursor && <div className="bg-cursor" style={{ width: `${pctCursor}%` }} />}
                       </div>
                     </td>
                   </tr>
@@ -2504,8 +2985,9 @@ function ComparisonView({
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                 <Tooltip />
                 <Legend />
-                <Line type="monotone" dataKey="codex" stroke={BRAND.codex} strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="claude" stroke={BRAND.claude} strokeWidth={2} dot={false} />
+                {showCodex && <Line type="monotone" dataKey="codex" stroke={BRAND.codex} strokeWidth={2} dot={false} />}
+                {showClaude && <Line type="monotone" dataKey="claude" stroke={BRAND.claude} strokeWidth={2} dot={false} />}
+                {showCursor && <Line type="monotone" dataKey="cursor" stroke={BRAND.cursor} strokeWidth={2} dot={false} />}
                 {eventsBrush.selectionOverlay()}
               </LineChart>
             </ResponsiveContainer>
@@ -2523,12 +3005,21 @@ function ComparisonView({
             <p className="text-sm text-slate-500">Cumulative tokens per session, summed per day.</p>
           </div>
           <div className="flex items-center gap-3 text-xs">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-3 rounded-full bg-codex" /> Codex {formatNumber(tokensTotalCodex)}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-3 rounded-full bg-claude" /> Claude {formatNumber(tokensTotalClaude)}
-            </span>
+            {showCodex && (
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-3 rounded-full bg-codex" /> Codex {formatNumber(tokensTotalCodex)}
+              </span>
+            )}
+            {showClaude && (
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-3 rounded-full bg-claude" /> Claude {formatNumber(tokensTotalClaude)}
+              </span>
+            )}
+            {showCursor && (
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2 w-3 rounded-full bg-cursor" /> Cursor {formatNumber(tokensTotalCursor)}
+              </span>
+            )}
           </div>
         </div>
         {tokensMerged.length ? (
@@ -2544,14 +3035,19 @@ function ComparisonView({
                     <stop offset="5%" stopColor={BRAND.claude} stopOpacity={0.5} />
                     <stop offset="95%" stopColor={BRAND.claude} stopOpacity={0} />
                   </linearGradient>
+                  <linearGradient id="g-cursor" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={BRAND.cursor} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={BRAND.cursor} stopOpacity={0} />
+                  </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
                 <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => formatTokens(Number(v))} />
                 <Tooltip formatter={(v: number) => formatNumber(v)} />
                 <Legend />
-                <Area type="monotone" dataKey="codex" stroke={BRAND.codex} fill="url(#g-codex)" strokeWidth={2} />
-                <Area type="monotone" dataKey="claude" stroke={BRAND.claude} fill="url(#g-claude)" strokeWidth={2} />
+                {showCodex && <Area type="monotone" dataKey="codex" stroke={BRAND.codex} fill="url(#g-codex)" strokeWidth={2} />}
+                {showClaude && <Area type="monotone" dataKey="claude" stroke={BRAND.claude} fill="url(#g-claude)" strokeWidth={2} />}
+                {showCursor && <Area type="monotone" dataKey="cursor" stroke={BRAND.cursor} fill="url(#g-cursor)" strokeWidth={2} />}
                 {tokensBrushChart.selectionOverlay()}
               </AreaChart>
             </ResponsiveContainer>
@@ -2561,65 +3057,47 @@ function ComparisonView({
         )}
       </div>
 
-      {/* Token breakdown — input vs cached vs output vs reasoning, grouped bars */}
-      <div className="panel p-4">
-        <h2 className="text-lg font-semibold text-ink">Token Breakdown</h2>
-        <p className="mb-3 text-sm text-slate-500">Where tokens go: input, cached, output, reasoning.</p>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={tokenBreakdownData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
-              <XAxis dataKey="kind" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => formatTokens(Number(v))} />
-              <Tooltip formatter={(v: number) => formatNumber(v)} />
-              <Legend />
-              <Bar dataKey="codex" fill={BRAND.codex} radius={[4, 4, 0, 0]} />
-              <Bar dataKey="claude" fill={BRAND.claude} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      {/* Viz-audit cuts: Token Breakdown (input/cached/output/reasoning
+       *  bars) — the Daily Token Usage area chart above already conveys
+       *  the volume story. Hourly cadence ("When You Use Each Tool") —
+       *  third copy of hour-of-day. Top Tools per source — raw tool
+       *  names like `Bash`/`Read` are inscrutable to a casual viewer.
+       *  All three deleted in favor of fewer-but-better signals.
+       *  Top Models stays — it's the answer to "what am I actually
+       *  paying for" per source, which is the comparison story. */}
 
-      {/* Hourly cadence — see when each is actually used */}
-      <div className="panel p-4">
-        <h2 className="text-lg font-semibold text-ink">When You Use Each Tool</h2>
-        <p className="mb-3 text-sm text-slate-500">Events by hour-of-day across the entire range.</p>
-        <div className="h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={hourlyMerged}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
-              <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
-              <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="codex" fill={BRAND.codex} radius={[3, 3, 0, 0]} />
-              <Bar dataKey="claude" fill={BRAND.claude} radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Top tools side-by-side */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <TopList title="Top Codex Tools" tone="codex" rows={codex?.topTools || []} />
-        <TopList title="Top Claude Tools" tone="claude" rows={claude?.topTools || []} />
-      </div>
-
-      {/* Top models side-by-side */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <ModelList title="Codex Models" tone="codex" rows={codex?.topModels || []} />
-        <ModelList title="Claude Models" tone="claude" rows={claude?.topModels || []} />
+      {/* Top models. Grid flexes to visible source count. */}
+      <div
+        className={`grid gap-3 ${
+          visibleSources.length === 1
+            ? "sm:grid-cols-1"
+            : visibleSources.length === 2
+              ? "sm:grid-cols-2"
+              : "sm:grid-cols-3"
+        }`}
+      >
+        {showCodex && <ModelList title="Codex Models" tone="codex" rows={codex?.topModels || []} />}
+        {showClaude && <ModelList title="Claude Models" tone="claude" rows={claude?.topModels || []} />}
+        {showCursor && <ModelList title="Cursor Models" tone="cursor" rows={cursorSrc?.topModels || []} />}
       </div>
     </section>
   );
 }
 
-type BrandTone = "codex" | "claude";
+type BrandTone = "codex" | "claude" | "cursor";
 
 function brandClasses(tone: BrandTone) {
-  return tone === "claude"
-    ? { text: "text-claude", bg: "bg-claude", tint: "bg-claude-tint", border: "border-claude" }
-    : { text: "text-codex", bg: "bg-codex", tint: "bg-codex-tint", border: "border-codex" };
+  if (tone === "claude") return { text: "text-claude", bg: "bg-claude", tint: "bg-claude-tint", border: "border-claude" };
+  if (tone === "cursor") return { text: "text-cursor", bg: "bg-cursor", tint: "bg-cursor-tint", border: "border-cursor" };
+  return { text: "text-codex", bg: "bg-codex", tint: "bg-codex-tint", border: "border-codex" };
+}
+
+// Single lookup so SourceHeader/TopList/ModelList don't each repeat the
+// chain of ternaries when a fourth source eventually shows up.
+function brandLogo(tone: BrandTone) {
+  if (tone === "claude") return ClaudeLogo;
+  if (tone === "cursor") return CursorLogo;
+  return CodexLogo;
 }
 
 function SourceHeader({
@@ -2633,7 +3111,7 @@ function SourceHeader({
 }) {
   const t = totals || {};
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = brandLogo(tone);
   return (
     <div className={`panel overflow-hidden border-2 ${cls.border}`}>
       <div className={`flex items-center justify-between px-4 py-3 ${cls.tint}`}>
@@ -2677,7 +3155,7 @@ function TopList({
   tone: BrandTone;
 }) {
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = brandLogo(tone);
   return (
     <div className="panel p-4">
       <h3 className={`mb-3 flex items-center gap-2 text-sm font-semibold ${cls.text}`}>
@@ -2712,7 +3190,7 @@ function ModelList({
   tone: BrandTone;
 }) {
   const cls = brandClasses(tone);
-  const Logo = tone === "claude" ? ClaudeLogo : CodexLogo;
+  const Logo = brandLogo(tone);
   return (
     <div className="panel p-4">
       <h3 className={`mb-3 flex items-center gap-2 text-sm font-semibold ${cls.text}`}>

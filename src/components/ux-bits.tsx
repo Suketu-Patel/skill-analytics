@@ -279,11 +279,16 @@ function ConfettiBurst({ label, onDone }: { label: string; onDone: () => void })
 // ⌘K modal. Searches across tabs, skills, models, projects, and recent
 // expensive sessions. Picks call back to the parent to switch tabs.
 
-type PaletteItem = {
+// Palette entries are intentionally a free-form list keyed by `group`,
+// not a closed union. Anything in the app can declare its own group and
+// it'll render in insertion order under that header. Keeping `group` as
+// `string` makes new dynamic surfaces (Settings actions, Panel anchors,
+// Region picks, Source filters, Recent sessions) trivial to plug in.
+export type PaletteItem = {
   id: string;
   label: string;
   hint?: string;
-  group: "Tab" | "Skill" | "Model" | "Project" | "Session";
+  group: string;
   onPick: () => void;
 };
 

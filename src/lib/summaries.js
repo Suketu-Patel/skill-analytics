@@ -22,7 +22,63 @@ const KIND = "cost_fun_facts";
 
 // ─── prompt ──────────────────────────────────────────────────────────────
 
-function buildPrompt(h) {
+// Region-flavored metaphor banks. The model gets concrete, locally
+// resonant references rather than always defaulting to Costco chickens
+// and NYC subway swipes. Currency stays USD (that's what the APIs bill
+// in), but each region's prompt also includes the approximate local-
+// currency conversion so "$50" lands as "₹4,200" for an Indian user.
+const REGION_FLAVOR = {
+  US: {
+    name: "United States",
+    currencyHint: "Keep all dollar figures in USD with no conversion.",
+    metaphors:
+      "Costco rotisserie chickens ($4.99 each), NYC subway swipes ($2.90), Empire State Buildings stacked, Yankee Stadium beers ($14), Olympic pools of coffee, Tesla Model 3s ($42k), Pop-Tart toaster cycles, Big Mac stacks ($5.69), Manhattan rent-months ($4.5k), Trader Joe's runs",
+  },
+  IN: {
+    name: "India",
+    currencyHint:
+      "Show dollar figures AND their approximate INR equivalent in parentheses using ~83 INR per USD, e.g. \"$500 (~₹41,500)\". Round INR to the nearest hundred or thousand.",
+    metaphors:
+      "auto-rickshaw rides in Mumbai (~₹50), masala chai at a tapri (~₹15), Bengaluru metro fares (~₹25), Goa beach shacks, biryani plates from Paradise (~₹450), monthly Mumbai 1BHK rent (~₹35,000), Royal Enfield Classic 350 (~₹2.1L), Ola/Uber cab rides across Delhi, Big Basket grocery runs, IPL match tickets, weekend Goa flights from Bangalore",
+  },
+  UK: {
+    name: "United Kingdom",
+    currencyHint:
+      "Show dollar figures AND their approximate GBP equivalent in parentheses using ~0.79 GBP per USD, e.g. \"$500 (~£395)\".",
+    metaphors:
+      "pints at a London pub (~£6), Tube rides (~£2.80), Greggs sausage rolls (£1.30), monthly Oyster cards, fish-and-chips dinners, Eurostar trips to Paris, a year of council tax, Premier League season tickets",
+  },
+  EU: {
+    name: "Europe",
+    currencyHint:
+      "Show dollar figures AND their approximate EUR equivalent in parentheses using ~0.92 EUR per USD, e.g. \"$500 (~€460)\".",
+    metaphors:
+      "espressos at a Roman bar (~€1.20), Berlin U-Bahn rides (~€3), Paris baguettes (~€1.20), high-speed TGV tickets, Oktoberfest steins, monthly Amsterdam rent, a Ryanair weekend, IKEA meatball plates",
+  },
+  JP: {
+    name: "Japan",
+    currencyHint:
+      "Show dollar figures AND their approximate JPY equivalent in parentheses using ~150 JPY per USD, e.g. \"$500 (~¥75,000)\".",
+    metaphors:
+      "Tokyo subway rides (~¥180), 7-Eleven onigiri (~¥150), Shinkansen Tokyo→Osaka (~¥14,000), ramen bowls in Shibuya, a Daiso shopping spree, gachapon spins, a single Pokémon card",
+  },
+  AU: {
+    name: "Australia",
+    currencyHint:
+      "Show dollar figures AND their approximate AUD equivalent in parentheses using ~1.52 AUD per USD, e.g. \"$500 (~A$760)\".",
+    metaphors:
+      "flat whites at Melbourne cafés (~A$5), Opal card swipes (~A$4), meat pies, Bunnings sausages (A$3.50), Vegemite jars, a weekend in Byron Bay",
+  },
+  GLOBAL: {
+    name: "Global",
+    currencyHint: "Keep all figures in USD; avoid country-specific currency conversions.",
+    metaphors:
+      "Spotify Premium months ($11), Netflix subscriptions ($15), iPhone Pro Maxes ($1199), economy flights, a year of streaming, a barista's salary, AAA video games ($70), gym memberships",
+  },
+};
+
+export function buildPrompt(h, region = "US") {
+  const flavor = REGION_FLAVOR[region] || REGION_FLAVOR.US;
   // Round figures so the prompt hash doesn't change for trivial cent-level
   // jitter. Keeps cache hits warm across import runs.
   const spend = Math.round(h.spend_total);
@@ -38,7 +94,16 @@ function buildPrompt(h) {
   const codexSpend = Math.round(h.source_split?.codex || 0);
   const burnDay = h.most_expensive_day;
 
-  return `Generate exactly 5 fun, snarky 1-2 line "did you know?" facts about my AI coding tool usage. Use vivid American comparisons that make the scale tangible — Empire State Buildings stacked, football fields, Costco rotisserie chickens, NYC subway swipes, Yankee Stadium seats, Olympic swimming pools of coffee, Tesla Model 3s, lifetime supplies of Pop-Tarts, etc. Be slightly sarcastic but never mean. Keep each fact under 25 words. NO emoji. NO markdown. NO numbered list — just one fact per line.
+  return `Generate exactly 7 fun, snarky 1-2 line "did you know?" facts about my AI coding tool usage for a user based in ${flavor.name}. Use vivid, specific ${flavor.name}-resonant comparisons that make scale tangible — pick from things like: ${flavor.metaphors}. ${flavor.currencyHint} Vary the metaphor — never reuse one across the seven facts. Be slightly sarcastic but never mean. Each fact under 25 words. NO emoji. NO markdown. NO numbered list — just one fact per line.
+
+REQUIRED coverage — produce exactly one fact for each of these angles, in this order:
+  1. CACHE — what prompt-cache savings bought you
+  2. BURN — the worst-spend day or a spike
+  3. MODEL — Claude vs Codex split or model preference
+  4. SESSION — average-cost-per-session reality check
+  5. SCALE — total spend converted into something physical
+  6. TOKENS — context-window scale (compare millions of tokens to something concrete: novels, encyclopedias, the Library of Congress, etc.)
+  7. WILDCARD — a surprising ratio, oddity, or "you could have bought X instead" punchline drawn from any combination of the numbers
 
 My usage:
   - total spend: $${spend.toLocaleString()}
@@ -51,7 +116,7 @@ My usage:
   ${burnDay ? `- worst burn day: ${burnDay.day} at $${Math.round(burnDay.cost).toLocaleString()}` : ""}
 
 Return STRICT JSON only:
-{"facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"]}`;
+{"facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5", "fact 6", "fact 7"]}`;
 }
 
 // ─── subprocess helper (mirrors the one in judge.js) ────────────────────
@@ -164,9 +229,12 @@ function writeCached(hash, model, payload) {
  *   { facts: string[], generated_at, model, cached: boolean }
  *   { error: "...", facts: [] } on failure
  */
-export async function getCostFunFacts(headline, { force = false } = {}) {
-  const prompt = buildPrompt(headline);
-  const hash = sha256(`${KIND}:${prompt}`);
+export async function getCostFunFacts(headline, { force = false, region = "US" } = {}) {
+  // Region rides into the prompt and therefore into the hash — different
+  // regions get different cached responses so an Indian user never sees
+  // the cached "Costco chicken" line generated for an American user.
+  const prompt = buildPrompt(headline, region);
+  const hash = sha256(`${KIND}:${region}:${prompt}`);
 
   if (!force) {
     const cached = readCached(hash);
@@ -206,7 +274,7 @@ export async function getCostFunFacts(headline, { force = false } = {}) {
 
   const facts = parsed.facts
     .filter((f) => typeof f === "string" && f.trim())
-    .slice(0, 6);
+    .slice(0, 8);
 
   const payload = { facts };
   writeCached(hash, HAIKU_MODEL, payload);

@@ -441,11 +441,11 @@ export function getTimelineMetrics(opts = {}) {
   `);
 }
 
-// Side-by-side aggregates for codex vs claude. Used by the Comparison tab.
+// Side-by-side aggregates for codex vs claude vs cursor. Used by the Comparison tab.
 export function getComparisonMetrics(opts = {}) {
   const fromAnd = opts?.from ? ` AND timestamp >= ${sqlString(opts.from)}` : "";
   const toAnd = opts?.to ? ` AND timestamp <= ${sqlString(opts.to)}` : "";
-  const sources = ["codex", "claude"];
+  const sources = ["codex", "claude", "cursor"];
   const rows = sources.map((src) => {
     const totals = one(`
       SELECT

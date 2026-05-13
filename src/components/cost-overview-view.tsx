@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { resolveRegion } from "./settings-view";
 import {
   Area,
   AreaChart,
@@ -275,9 +276,15 @@ type FunFacts = {
 export default function CostOverviewView({
   filterQS,
   onSelectRange,
+  refreshNonce = 0,
 }: {
   filterQS: string;
   onSelectRange?: (from: string, to: string) => void;
+  // Bumped by the parent after a successful sync. We refetch on change
+  // but suppress the loading skeleton when we already have data — the
+  // existing panels stay visible until the fresh payload arrives, then
+  // swap atomically. That's the "zero-downtime" refresh behaviour.
+  refreshNonce?: number;
 }) {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -291,7 +298,10 @@ export default function CostOverviewView({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // Only show the skeleton on cold start. On refreshNonce-driven
+    // reloads we already have a valid `data` payload — keep it on
+    // screen so the user sees a smooth swap instead of a flash.
+    if (!data) setLoading(true);
     const url = `/api/metrics/cost-overview${filterQS ? `?${filterQS}` : ""}`;
     fetch(url)
       .then((r) => r.json())
@@ -311,15 +321,31 @@ export default function CostOverviewView({
     return () => {
       cancelled = true;
     };
-  }, [filterQS]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterQS, refreshNonce]);
+
+  // Region (from Settings) tunes the metaphor bank — US → Costco
+  // chickens, IN → auto-rickshaw rides, etc. Stored in localStorage so
+  // we can't read it during SSR; bump on the "dashboard:region" event
+  // dispatched by SettingsView so a region change refetches without a
+  // full reload.
+  const [region, setRegion] = useState<string>("US");
+  useEffect(() => {
+    setRegion(resolveRegion());
+    const onChange = () => setRegion(resolveRegion());
+    window.addEventListener("dashboard:region", onChange);
+    return () => window.removeEventListener("dashboard:region", onChange);
+  }, []);
 
   // Fetch fun facts whenever the underlying data changes. The endpoint is
-  // cached server-side by content hash, so this is free on repeat calls.
+  // cached server-side by content hash + region, so this is free on
+  // repeat calls.
   const loadFunFacts = (force = false) => {
     setFunLoading(true);
-    const url = `/api/metrics/fun-facts${filterQS ? `?${filterQS}` : ""}${
-      force ? (filterQS ? "&" : "?") + "force=1" : ""
-    }`;
+    const qs = new URLSearchParams(filterQS);
+    qs.set("region", region);
+    if (force) qs.set("force", "1");
+    const url = `/api/metrics/fun-facts?${qs.toString()}`;
     fetch(url)
       .then((r) => r.json())
       .then((j) => setFunFacts(j))
@@ -328,8 +354,10 @@ export default function CostOverviewView({
   };
   useEffect(() => {
     if (data) loadFunFacts(false);
+    // Refetch when region flips so an Indian user doesn't keep seeing
+    // the cached US-flavored facts that were generated first.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.headline.spend_total, data?.headline.sessions_total]);
+  }, [data?.headline.spend_total, data?.headline.sessions_total, region]);
 
   // Derived data: by-source pie (Claude vs Codex).
   const sourcePie = useMemo(() => {
@@ -392,6 +420,7 @@ export default function CostOverviewView({
   const factForBurn = pickFact("burn");
   const factForModel = pickFact("model");
   const factForSessions = pickFact("session");
+  const factForTokens = pickFact("token");
 
   if (loading && !data) {
     // Skeleton beats a "Loading…" line — page doesn't collapse, layout
@@ -695,46 +724,33 @@ export default function CostOverviewView({
         </div>
       </div>
 
-      {/* ─── time-of-day + day-of-week ──────────────────────────────── */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="panel p-4">
-          <h2 id="hour-of-day" className="group text-lg font-semibold text-ink">Hour of Day (UTC)<PanelAnchor id="hour-of-day" /></h2>
-          <p className="text-xs text-slate-500">when sessions fire</p>
-          <div className="mt-3 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={hourChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={2} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip
-                  formatter={(v: number, name: string) =>
-                    name === "cost" ? usdPrecise(v) : v
-                  }
-                />
-                <Bar dataKey="sessions" fill="#0f8f8a" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      {/* ─── time-of-day ─────────────────────────────────────────────
+       *
+       * Day-of-week chart cut in the viz audit — it looked pretty but
+       * "you spend more on weekdays than weekends" isn't actually a
+       * useful insight, and it duplicated the daily-spend signal.
+       * Hour-of-day stays because it anchors the token-themed fun-fact
+       * bubble and is one of two surfaces where "when do I burn the
+       * most?" lands clearly. */}
+      <div className="panel p-4">
+        <h2 id="hour-of-day" className="group text-lg font-semibold text-ink">Hour of Day (UTC)<PanelAnchor id="hour-of-day" /></h2>
+        <p className="text-xs text-slate-500">when sessions fire</p>
+        <div className="mt-3 h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={hourChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
+              <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={2} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip
+                formatter={(v: number, name: string) =>
+                  name === "cost" ? usdPrecise(v) : v
+                }
+              />
+              <Bar dataKey="sessions" fill="#0f8f8a" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
-
-        <div className="panel p-4">
-          <h2 id="day-of-week" className="group text-lg font-semibold text-ink">Day of Week<PanelAnchor id="day-of-week" /></h2>
-          <p className="text-xs text-slate-500">total spend per weekday</p>
-          <div className="mt-3 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dowChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(v) => (v >= 10 ? `$${Math.round(v)}` : `$${v.toFixed(1)}`)}
-                />
-                <Tooltip formatter={(v: number) => usdPrecise(v)} />
-                <Bar dataKey="cost" fill="#6157a8" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        <FactBubble fact={factForTokens} tone="violet" />
       </div>
 
       {/* ─── top sessions ──────────────────────────────────────────── */}

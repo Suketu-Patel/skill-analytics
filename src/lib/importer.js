@@ -4,6 +4,7 @@ import {
   SqlBatch,
   execSql,
   initDb,
+  queryRows,
   sha256,
   sqlBool,
   sqlNumber,
@@ -11,6 +12,7 @@ import {
 } from "./sqlite.js";
 import { codexHome, explicitEventLogPath, projectRoot } from "./paths.js";
 import { importClaude } from "./claude-importer.js";
+import { importCursor } from "./cursor-importer.js";
 
 const MAX_TEXT = 900;
 // Cap for the raw JSONL line stored on `raw_events.raw_json`. The evidence modal
@@ -789,6 +791,15 @@ export function importAll(options = {}) {
     claudeResult = { error: String(err?.message || err) };
   }
 
+  // Cursor data lives in ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb.
+  // Same isolation pattern as Claude — a Cursor failure shouldn't block the rest.
+  let cursorResult = null;
+  try {
+    cursorResult = importCursor();
+  } catch (err) {
+    cursorResult = { error: String(err?.message || err) };
+  }
+
   execSql("VACUUM;");
 
   // Cache the Wrapped snapshot so its tab loads instantly after sync
@@ -804,6 +815,33 @@ export function importAll(options = {}) {
       console.error("wrapped snapshot cache failed:", err?.message || err);
     });
 
+  // Generic metric cache revalidation. invalidate wipes every cached
+  // /api/metrics/* row so we never serve pre-sync data; precomputeAll
+  // then warms the no-filter variants + the per-project headlines so
+  // tab-switching is instant. Lazy variants populate on first request.
+  import("./metric-cache.js")
+    .then(async (m) => {
+      m.invalidateAll();
+      await m.precomputeAll({
+        getKnownProjects: () => {
+          // Pull cwds straight from the DB so we don't need to thread
+          // them through the importer's local accumulators. Filtered to
+          // non-empty since "(unknown)" cwds aren't pickable in the UI.
+          try {
+            return queryRows(
+              `SELECT DISTINCT cwd FROM turns WHERE cwd IS NOT NULL AND cwd <> ''`
+            ).map((r) => r.cwd);
+          } catch {
+            return [];
+          }
+        },
+      });
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("metric cache revalidate failed:", err?.message || err);
+    });
+
   return {
     codex: {
       skills: skills.length,
@@ -815,6 +853,7 @@ export function importAll(options = {}) {
       explicitLines
     },
     claude: claudeResult,
+    cursor: cursorResult,
     dbReady: true
   };
 }

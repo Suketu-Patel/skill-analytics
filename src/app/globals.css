@@ -72,6 +72,15 @@ select {
   animation: loader-slide 1.1s ease-in-out infinite;
 }
 
+/* Toast slide-in/out used by the "Dashboard refreshed" pill after a
+ * background sync resolves. ~2.2s total: pop in, hold, fade out. */
+@keyframes fade-in-out {
+  0% { opacity: 0; transform: translateY(-6px); }
+  10% { opacity: 1; transform: translateY(0); }
+  80% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-6px); }
+}
+
 /* Shimmering skeleton blocks for cards/rows that have no data yet. */
 @keyframes shimmer {
   0% { background-position: -400px 0; }
@@ -102,3 +111,77 @@ select {
   pointer-events: none;
   border-radius: inherit;
 }
+
+/* ─── Dark mode ───────────────────────────────────────────────────────
+ *
+ * Activated by adding `.dark` to <html>. The Settings tab persists the
+ * choice to localStorage and an inline script in layout.tsx applies it
+ * before first paint.
+ *
+ * Strategy: keep all the Tailwind-utility colors (text-ink, bg-panel,
+ * border-line) but redefine the .panel / .metric-card class helpers
+ * plus the body chrome under the .dark scope. Brand accents (teal,
+ * coral, claude, codex) stay identical — they read well on both.
+ *
+ * We don't repaint every single colored utility — chart fills and
+ * source tints are intentionally constant so a screenshot looks the
+ * same across themes. Surfaces, text, borders, and overlays adapt.
+ */
+.dark {
+  color-scheme: dark;
+}
+.dark body {
+  background:
+    linear-gradient(180deg, rgba(15, 143, 138, 0.10), transparent 260px),
+    #0c1014;
+  color: #e7ebf0;
+}
+.dark .panel,
+.dark .metric-card {
+  background: #161b21;
+  border-color: #2a323b;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+/* Borders, surfaces, and ink classes redefined for dark.
+ * Using attribute selectors so the override wins over the utility
+ * without forcing every author site to add `dark:` prefixes. */
+.dark .bg-panel { background-color: #161b21 !important; }
+.dark .bg-white { background-color: #161b21 !important; }
+.dark .bg-surface { background-color: #1b2128 !important; }
+.dark .text-ink { color: #e7ebf0 !important; }
+.dark .text-slate-500 { color: #94a3b3 !important; }
+.dark .text-slate-600 { color: #aab4c0 !important; }
+.dark .text-slate-700 { color: #c2cad4 !important; }
+.dark .text-slate-400 { color: #7f8a96 !important; }
+.dark .border-line { border-color: #2a323b !important; }
+.dark .border-slate-200 { border-color: #2a323b !important; }
+.dark .border-slate-300 { border-color: #2a323b !important; }
+.dark .bg-slate-50 { background-color: #1b2128 !important; }
+.dark .bg-slate-100 { background-color: #20262e !important; }
+.dark .hover\:bg-surface:hover { background-color: #1b2128 !important; }
+.dark .hover\:bg-slate-50:hover { background-color: #1b2128 !important; }
+.dark .loader-bar { background: rgba(15, 143, 138, 0.18); }
+.dark .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(42, 50, 59, 0.6) 0%,
+    rgba(60, 70, 82, 0.9) 50%,
+    rgba(42, 50, 59, 0.6) 100%
+  );
+}
+.dark .is-loading::after {
+  background: rgba(0, 0, 0, 0.4);
+}
+/* Inputs and selects: keep the dark surface look. */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #1b2128;
+  color: #e7ebf0;
+  border-color: #2a323b;
+}
+.dark input::placeholder { color: #6b7682; }
+/* Tinted callouts (amber/teal/rose/violet/emerald sticky notes) keep
+ * their hue but get a deeper translucent fill on dark backgrounds so
+ * white text isn't required. We leave those alone — the warm tones
+ * still read fine against #161b21. */

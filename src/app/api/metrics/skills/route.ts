@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSkillMetrics } from "@/lib/metrics";
 import { parseOpts } from "@/lib/route-opts";
+import { readOrCompute } from "@/lib/metric-cache.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,8 +36,12 @@ function categorize(skill: SkillRow): { category: string; project: string | null
 
 export async function GET(request: Request) {
   const opts = parseOpts(request.url);
-  const raw = getSkillMetrics(opts) as SkillRow[];
-  const skills = raw.map((s) => ({ ...s, ...categorize(s) }));
-  const projects = [...new Set(skills.map((s) => s.project).filter(Boolean))].sort();
-  return NextResponse.json({ skills, projects });
+  return NextResponse.json(
+    readOrCompute("skills", opts, () => {
+      const raw = getSkillMetrics(opts) as SkillRow[];
+      const skills = raw.map((s) => ({ ...s, ...categorize(s) }));
+      const projects = [...new Set(skills.map((s) => s.project).filter(Boolean))].sort();
+      return { skills, projects };
+    })
+  );
 }
