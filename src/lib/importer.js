@@ -11,6 +11,7 @@ import {
 } from "./sqlite.js";
 import { codexHome, explicitEventLogPath, projectRoot } from "./paths.js";
 import { importClaude } from "./claude-importer.js";
+import { importCursor } from "./cursor-importer.js";
 
 const MAX_TEXT = 900;
 // Cap for the raw JSONL line stored on `raw_events.raw_json`. The evidence modal
@@ -789,6 +790,14 @@ export function importAll(options = {}) {
     claudeResult = { error: String(err?.message || err) };
   }
 
+  // Cursor data lives in ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb.
+  let cursorResult = null;
+  try {
+    cursorResult = importCursor();
+  } catch (err) {
+    cursorResult = { error: String(err?.message || err) };
+  }
+
   execSql("VACUUM;");
 
   return {
@@ -802,6 +811,7 @@ export function importAll(options = {}) {
       explicitLines
     },
     claude: claudeResult,
+    cursor: cursorResult,
     dbReady: true
   };
 }

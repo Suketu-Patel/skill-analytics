@@ -354,7 +354,7 @@ export function getTimelineMetrics(opts = {}) {
 export function getComparisonMetrics(opts = {}) {
   const fromAnd = opts?.from ? ` AND timestamp >= ${sqlString(opts.from)}` : "";
   const toAnd = opts?.to ? ` AND timestamp <= ${sqlString(opts.to)}` : "";
-  const sources = ["codex", "claude"];
+  const sources = ["codex", "claude", "cursor"];
   const rows = sources.map((src) => {
     const totals = one(`
       SELECT
