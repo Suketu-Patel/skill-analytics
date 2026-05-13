@@ -753,13 +753,14 @@ export default function DashboardClient() {
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-teal">
             <BarChart3 size={18} />
-            Skill Analytics
+            AI Tab
           </div>
           <h1 className="mt-2 text-2xl font-semibold tracking-normal text-ink sm:text-3xl">
-            Codex skill usage and health
+            Your AI coding tab
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Historical inference from Codex sessions plus explicit skill lifecycle events.
+            Cost, tokens, and sessions across Claude Code and Codex — local-only,
+            computed from the JSONL transcripts already on your machine.
           </p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
@@ -846,23 +847,12 @@ export default function DashboardClient() {
         )}
       </header>
 
-      <FilterBar
-        skills={skills}
-        projects={projects}
-        category={categoryFilter}
-        project={projectFilter}
-        hideUnused={hideUnused}
-        source={sourceFilter}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onCategory={setCategoryFilter}
-        onProject={setProjectFilter}
-        onHideUnused={setHideUnused}
-        onSource={setSourceFilter}
-        onDateFrom={setDateFrom}
-        onDateTo={setDateTo}
-        filteredCount={filteredSkills.length}
-      />
+      {/* FilterBar moved into the Skills tab — its controls (category,
+          project, hide-unused) only make sense for the skill-centric
+          views. Date range is now driven by click-and-drag on the
+          time-series charts (see useChartDateBrush). Source filter
+          (claude vs codex) still lives here when on Skills, where it
+          changes the per-source counts shown in those panels. */}
 
       <nav className="flex flex-wrap gap-2">
         {[
@@ -948,6 +938,26 @@ export default function DashboardClient() {
         <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} />
       )}
       {active === "wrapped" && <WrappedView filterQS={filterQS} />}
+
+      {active === "skills" && (
+        <FilterBar
+          skills={skills}
+          projects={projects}
+          category={categoryFilter}
+          project={projectFilter}
+          hideUnused={hideUnused}
+          source={sourceFilter}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onCategory={setCategoryFilter}
+          onProject={setProjectFilter}
+          onHideUnused={setHideUnused}
+          onSource={setSourceFilter}
+          onDateFrom={setDateFrom}
+          onDateTo={setDateTo}
+          filteredCount={filteredSkills.length}
+        />
+      )}
 
       {(active === "skills" || active === "overview") && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">

@@ -1,8 +1,8 @@
-# Skill Analytics
+# AI Tab
 
-Local **Next.js dashboard** for analyzing your **Claude Code** and **Codex** usage on your own machine. SQLite-backed, no data leaves your laptop.
+Your AI coding tab — a local **Next.js dashboard** that tracks **cost, tokens, and sessions** across **Claude Code** and **Codex** by reading the JSONL transcripts already on your machine. SQLite-backed, no data leaves your laptop.
 
-After v2 the dashboard is **cost & token centric** — the landing tab is now "Cost & Tokens" with daily spend, model leaderboards, project breakdowns, hour-of-day patterns, burn alerts, and AI-generated "reality check" summaries.
+The center stage is "Cost & Tokens": daily spend, model leaderboards, project breakdowns, hour-of-day patterns, burn alerts, and AI-generated reality-check facts. A shareable **Wrapped** tab pulls the highlights into a clean Codex-vs-Claude card layout you can screenshot. Optional **Judgments** tab runs Haiku-as-judge over your invocations with a Codex tiebreaker.
 
 http://127.0.0.1:4210/
 
