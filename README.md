@@ -1,10 +1,30 @@
 # AI Tab
 
-Your AI coding tab — a local **Next.js dashboard** that tracks **cost, tokens, and sessions** across **Claude Code** and **Codex** by reading the JSONL transcripts already on your machine. SQLite-backed, no data leaves your laptop.
+Your AI coding tab — a local **Next.js dashboard** that tracks **cost, tokens, and sessions** across **Claude Code**, **Codex**, and **Cursor** by reading the JSONL/state files already on your machine. SQLite-backed, no data leaves your laptop.
 
-The center stage is "Cost & Tokens": daily spend, model leaderboards, project breakdowns, hour-of-day patterns, burn alerts, and AI-generated reality-check facts. A shareable **Wrapped** tab pulls the highlights into a clean Codex-vs-Claude card layout you can screenshot. Optional **Judgments** tab runs Haiku-as-judge over your invocations with a Codex tiebreaker.
+The center stage is "Cost & Tokens": daily spend, model leaderboards, project breakdowns, hour-of-day patterns, burn alerts, and AI-generated reality-check facts. A shareable **Wrapped** tab pulls the highlights into a clean side-by-side card layout you can screenshot. Optional **Judgments** tab runs Haiku-as-judge over your invocations with a Codex tiebreaker.
+
+![Cost & Tokens — the default landing tab](docs/screenshots/01-cost-overview.png)
 
 http://127.0.0.1:4210/
+
+---
+
+## Screenshots
+
+<table>
+<tr>
+<td width="50%"><b>Wrapped</b> — shareable year-in-review card<br/><img src="docs/screenshots/02-wrapped.png" alt="Wrapped tab" /></td>
+<td width="50%"><b>Claude vs Codex vs Cursor</b> — three-way comparison<br/><img src="docs/screenshots/03-comparison.png" alt="Comparison tab" /></td>
+</tr>
+<tr>
+<td><b>Timeline</b> — token + cost flow over time<br/><img src="docs/screenshots/04-timeline.png" alt="Timeline tab" /></td>
+<td><b>Skills</b> — invocation health + errors + cost-per-skill<br/><img src="docs/screenshots/05-skills.png" alt="Skills tab" /></td>
+</tr>
+<tr>
+<td colspan="2"><b>Settings</b> — theme, region-aware AI tidbits, per-source visibility, hidden tabs, pricing accuracy refresh<br/><img src="docs/screenshots/06-settings.png" alt="Settings tab" /></td>
+</tr>
+</table>
 
 ---
 
