@@ -1,0 +1,30 @@
+{
+  "name": "skill-analytics",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 4210",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 4210",
+    "import": "node scripts/import.mjs",
+    "skill-event": "node scripts/skill-event.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.0"
+  }
+}
