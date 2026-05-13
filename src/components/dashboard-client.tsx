@@ -286,11 +286,25 @@ function shortPath(value?: string) {
 function useChartDateBrush(onSelect: (from: string, to: string) => void) {
   const [left, setLeft] = useState<string | null>(null);
   const [right, setRight] = useState<string | null>(null);
+  const isDragging = left != null;
 
   const reset = () => {
     setLeft(null);
     setRight(null);
   };
+
+  // While the user is dragging the chart, the browser would normally
+  // select all surrounding text (chart axis labels, panel headings,
+  // etc.) — the standard side-effect of any mousedown+drag. Block it at
+  // the document level for the duration of the drag.
+  useEffect(() => {
+    if (!isDragging) return;
+    const prev = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    return () => {
+      document.body.style.userSelect = prev;
+    };
+  }, [isDragging]);
 
   const chartProps = {
     onMouseDown: (e: { activeLabel?: string } | null) => {
@@ -313,9 +327,13 @@ function useChartDateBrush(onSelect: (from: string, to: string) => void) {
       reset();
     },
     onMouseLeave: reset,
-    // A grab cursor on the plot area makes the affordance discoverable
-    // — most users won't try to drag without a visual hint.
-    style: { cursor: "crosshair" } as React.CSSProperties,
+    // crosshair cursor + suppress text selection at the element level
+    // too (defense-in-depth alongside the document-level guard above).
+    style: {
+      cursor: "crosshair",
+      userSelect: "none",
+      WebkitUserSelect: "none",
+    } as React.CSSProperties,
   };
 
   const selectionOverlay = () =>
