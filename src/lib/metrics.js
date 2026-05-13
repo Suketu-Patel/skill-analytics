@@ -135,6 +135,57 @@ export function getOverviewMetrics(opts = {}) {
   return { totals, confidence, topSkills, topErrors, recentErrors };
 }
 
+/**
+ * Last 24 hours of cost activity bucketed by hour, for the header
+ * sparkline. Returns 24 datapoints (oldest → newest) with cost + token
+ * counts per bucket. Always computed against the latest data — never
+ * filtered by date range so the indicator is "current activity," not
+ * "spend in the brushed window."
+ */
+export function getRecentSparkline() {
+  // 24 buckets, each 1h wide, ending at the timestamp of the latest
+  // token_usage row. Anchoring on data-latest (not wall-clock now) means
+  // we keep showing meaningful activity even if you haven't used either
+  // CLI in the last few hours.
+  const latestRow = queryRows(
+    `SELECT MAX(timestamp) AS latest FROM token_usage WHERE timestamp IS NOT NULL`
+  )[0] || {};
+  const latest = latestRow.latest;
+  if (!latest) return { points: [], end_iso: null, total_cost: 0 };
+
+  const endMs = Date.parse(latest);
+  const startMs = endMs - 23 * 3600 * 1000;
+  const startIso = new Date(startMs).toISOString();
+  const rows = queryRows(`
+    SELECT tu.timestamp, tu.source, tu.input_tokens, tu.cached_input_tokens,
+           tu.output_tokens, tu.reasoning_output_tokens,
+           COALESCE(t.model, '(unknown)') AS model
+      FROM token_usage tu
+      LEFT JOIN turns t ON t.turn_id = tu.turn_id
+     WHERE tu.timestamp >= ${sqlString(startIso)}
+       AND tu.timestamp <= ${sqlString(latest)}
+  `);
+
+  const buckets = Array.from({ length: 24 }, (_, i) => {
+    const bucketStartMs = startMs + i * 3600 * 1000;
+    return {
+      hour_iso: new Date(bucketStartMs).toISOString(),
+      cost: 0,
+      tokens: 0,
+    };
+  });
+  for (const r of rows) {
+    const ts = Date.parse(r.timestamp);
+    const idx = Math.floor((ts - startMs) / 3600_000);
+    if (idx < 0 || idx >= 24) continue;
+    const c = computeCost(r.source, r.model, r);
+    buckets[idx].cost += c.cost;
+    buckets[idx].tokens += c.billable_tokens;
+  }
+  const total_cost = buckets.reduce((a, b) => a + b.cost, 0);
+  return { points: buckets, end_iso: latest, total_cost };
+}
+
 export function getSkillMetrics(opts = {}) {
   const seWhere = whereFilter(opts, "se");
   const seJoinCond = seWhere ? `se.skill_name = s.name AND ${seWhere}` : `se.skill_name = s.name`;

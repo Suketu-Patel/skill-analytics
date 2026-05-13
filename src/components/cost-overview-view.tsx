@@ -17,6 +17,7 @@ import {
   YAxis,
 } from "recharts";
 import { useChartDateBrush } from "./use-chart-date-brush";
+import { CostOverviewSkeleton, PanelAnchor } from "./ux-bits";
 
 // ─── data shapes ─────────────────────────────────────────────────────────
 
@@ -393,11 +394,9 @@ export default function CostOverviewView({
   const factForSessions = pickFact("session");
 
   if (loading && !data) {
-    return (
-      <section className="panel p-12 text-center text-sm text-slate-500">
-        Loading cost analytics…
-      </section>
-    );
+    // Skeleton beats a "Loading…" line — page doesn't collapse, layout
+    // is already in place when real data lands.
+    return <CostOverviewSkeleton />;
   }
 
   if (error) {
@@ -450,13 +449,14 @@ export default function CostOverviewView({
       {/* ─── daily cost trend ──────────────────────────────────────────── */}
       <div className="panel p-4">
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="text-lg font-semibold text-ink">
+          <h2 id="daily-spend" className="group text-lg font-semibold text-ink">
             Daily Spend
             {onSelectRange && (
               <span className="ml-2 text-xs font-normal text-slate-400">
                 — drag to filter
               </span>
             )}
+            <PanelAnchor id="daily-spend" />
           </h2>
           <span className="text-xs text-slate-500">
             fresh input + output · cached shown in Cache panel
@@ -506,7 +506,7 @@ export default function CostOverviewView({
       {/* ─── source split + cache panel ───────────────────────────────── */}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="panel p-4">
-          <h2 className="text-lg font-semibold text-ink">Claude vs Codex</h2>
+          <h2 id="claude-vs-codex" className="group text-lg font-semibold text-ink">Claude vs Codex<PanelAnchor id="claude-vs-codex" /></h2>
           <p className="text-xs text-slate-500">share of total spend</p>
           {sourcePie.length === 0 ? (
             <div className="p-6 text-sm text-slate-500">No data</div>
@@ -549,7 +549,7 @@ export default function CostOverviewView({
         </div>
 
         <div className="panel p-4">
-          <h2 className="text-lg font-semibold text-ink">Cache Effectiveness</h2>
+          <h2 id="cache-effectiveness" className="group text-lg font-semibold text-ink">Cache Effectiveness<PanelAnchor id="cache-effectiveness" /></h2>
           <p className="text-xs text-slate-500">prompt caching is doing most of the work</p>
           <div className="mt-3 space-y-3 text-sm">
             <div className="flex items-baseline justify-between">
@@ -587,7 +587,7 @@ export default function CostOverviewView({
         </div>
 
         <div className="panel p-4">
-          <h2 className="text-lg font-semibold text-ink">Burn Alerts</h2>
+          <h2 id="burn-alerts" className="group text-lg font-semibold text-ink">Burn Alerts<PanelAnchor id="burn-alerts" /></h2>
           <p className="text-xs text-slate-500">
             days where spend &gt; 3× median ({usd(h.median_daily_cost)}/day)
           </p>
@@ -614,7 +614,7 @@ export default function CostOverviewView({
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="panel overflow-hidden">
           <div className="border-b border-line p-4">
-            <h2 className="text-lg font-semibold text-ink">Spend by Model</h2>
+            <h2 id="spend-by-model" className="group text-lg font-semibold text-ink">Spend by Model<PanelAnchor id="spend-by-model" /></h2>
             <p className="text-xs text-slate-500">where the dollars go</p>
           </div>
           {factForModel && (
@@ -663,7 +663,7 @@ export default function CostOverviewView({
 
         <div className="panel overflow-hidden">
           <div className="border-b border-line p-4">
-            <h2 className="text-lg font-semibold text-ink">Spend by Project</h2>
+            <h2 id="spend-by-project" className="group text-lg font-semibold text-ink">Spend by Project<PanelAnchor id="spend-by-project" /></h2>
             <p className="text-xs text-slate-500">which working directory ate the budget</p>
           </div>
           {data.byProject.length === 0 ? (
@@ -698,7 +698,7 @@ export default function CostOverviewView({
       {/* ─── time-of-day + day-of-week ──────────────────────────────── */}
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="panel p-4">
-          <h2 className="text-lg font-semibold text-ink">Hour of Day (UTC)</h2>
+          <h2 id="hour-of-day" className="group text-lg font-semibold text-ink">Hour of Day (UTC)<PanelAnchor id="hour-of-day" /></h2>
           <p className="text-xs text-slate-500">when sessions fire</p>
           <div className="mt-3 h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -718,7 +718,7 @@ export default function CostOverviewView({
         </div>
 
         <div className="panel p-4">
-          <h2 className="text-lg font-semibold text-ink">Day of Week</h2>
+          <h2 id="day-of-week" className="group text-lg font-semibold text-ink">Day of Week<PanelAnchor id="day-of-week" /></h2>
           <p className="text-xs text-slate-500">total spend per weekday</p>
           <div className="mt-3 h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -740,7 +740,7 @@ export default function CostOverviewView({
       {/* ─── top sessions ──────────────────────────────────────────── */}
       <div className="panel overflow-hidden">
         <div className="border-b border-line p-4">
-          <h2 className="text-lg font-semibold text-ink">Most Expensive Sessions</h2>
+          <h2 id="top-sessions" className="group text-lg font-semibold text-ink">Most Expensive Sessions<PanelAnchor id="top-sessions" /></h2>
           <p className="text-xs text-slate-500">single sessions ranked by spend</p>
           {factForSessions && (
             <div className="mt-2">

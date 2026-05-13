@@ -3,6 +3,11 @@
 import CostOverviewView from "./cost-overview-view";
 import JudgmentsView from "./judgments-view";
 import { useChartDateBrush } from "./use-chart-date-brush";
+import {
+  CommandPalette,
+  HeaderSparkline,
+  MilestoneConfetti,
+} from "./ux-bits";
 import WrappedView from "./wrapped-view";
 import {
   Activity,
@@ -450,6 +455,13 @@ export default function DashboardClient() {
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<number | null>(null);
   const [updateCommits, setUpdateCommits] = useState<{ sha: string; subject: string }[]>([]);
+  // Command palette open state (⌘K toggles).
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Snapshot the milestone-relevant numbers so <MilestoneConfetti> can
+  // detect crossings. Pulled from the cost-overview endpoint.
+  const [milestoneSnap, setMilestoneSnap] = useState<{
+    spend: number; saved: number; tokens: number;
+  } | null>(null);
   const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<SkillCategoryFilter>("all");
   const [projectFilter, setProjectFilter] = useState<string>("all");
@@ -609,6 +621,8 @@ export default function DashboardClient() {
   // is instantaneous. Browser cache picks these up; the per-tab views
   // fire the same fetches and get cache hits. Fires once on mount with
   // a small delay so the initial paint isn't competing with these.
+  // While we're at it: grab the cost headline numbers for milestone
+  // confetti detection.
   useEffect(() => {
     const t = window.setTimeout(() => {
       const urls = [
@@ -617,10 +631,24 @@ export default function DashboardClient() {
         "/api/metrics/comparison",
         "/api/metrics/judgments",
         "/api/metrics/fun-facts",
+        "/api/metrics/sparkline",
       ];
       for (const u of urls) {
         fetch(u).catch(() => { /* prefetch is best-effort */ });
       }
+      // Milestone snapshot — reads the same prefetched cost-overview.
+      fetch("/api/metrics/cost-overview")
+        .then((r) => r.json())
+        .then((j) => {
+          if (!j?.ok) return;
+          const h = j.headline;
+          setMilestoneSnap({
+            spend: Number(h.spend_total || 0),
+            saved: Number(h.cache_savings || 0),
+            tokens: Number(h.tokens_billable || 0),
+          });
+        })
+        .catch(() => {});
     }, 400);
     return () => window.clearTimeout(t);
   }, []);
@@ -649,6 +677,12 @@ export default function DashboardClient() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "i") {
         e.preventDefault();
         if (!importing) runImport();
+        return;
+      }
+      // ⌘K / Ctrl+K toggles the command palette regardless of focus.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
         return;
       }
       if (inField) return;
@@ -824,10 +858,6 @@ export default function DashboardClient() {
           <h1 className="mt-2 text-2xl font-semibold tracking-normal text-ink sm:text-3xl">
             Your AI coding tab
           </h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Cost, tokens, and sessions across Claude Code and Codex — local-only,
-            computed from the JSONL transcripts already on your machine.
-          </p>
         </div>
         {/* Header right rail: three controls only. Used to be five
             (search + sync + update + refresh + import) which overflowed
@@ -836,6 +866,20 @@ export default function DashboardClient() {
             Skills tab's FilterBar; the manual Refresh is redundant
             since Import already calls loadData() after it completes. */}
         <div className="flex shrink-0 items-center gap-2">
+          {/* Two 24h sparklines side-by-side: cost (teal) and tokens
+              (violet). Always-on glance at both activity dimensions. */}
+          <HeaderSparkline metric="cost" />
+          <HeaderSparkline metric="tokens" />
+          {/* ⌘K palette trigger — clickable hint for users who don't read kbd lists */}
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            title="Open command palette (⌘K)"
+            className="hidden h-10 items-center gap-1.5 rounded-md border border-line bg-white px-3 text-xs font-medium text-slate-500 hover:border-teal hover:text-ink md:inline-flex"
+          >
+            <span>Jump…</span>
+            <kbd className="rounded bg-slate-100 px-1 text-[10px] tabular-nums">⌘K</kbd>
+          </button>
           <SyncStatus
             lastSyncedAt={lastSyncedAt}
             importing={importing}
@@ -1465,12 +1509,39 @@ export default function DashboardClient() {
           onOpenEvidence={openEvidence}
           onSelectRange={(from, to) => {
             handleChartDateSelect(from, to);
-            // Close the modal so the user can see the filter took effect
-            // across the main dashboard.
             setSkillDetailName(null);
           }}
         />
       ) : null}
+
+      {/* Global overlays: ⌘K palette + milestone confetti. Palette
+          items are computed from current state (top skills, recent
+          projects, etc.) so it always reflects current data. */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        items={[
+          { id: "tab-cost", group: "Tab", label: "Cost & Tokens", hint: "1", onPick: () => setActive("cost") },
+          { id: "tab-wrapped", group: "Tab", label: "Wrapped", hint: "2", onPick: () => setActive("wrapped") },
+          { id: "tab-comparison", group: "Tab", label: "Claude vs Codex", hint: "3", onPick: () => setActive("comparison") },
+          { id: "tab-timeline", group: "Tab", label: "Timeline", hint: "4", onPick: () => setActive("timeline") },
+          { id: "tab-judgments", group: "Tab", label: "Judgments", hint: "5", onPick: () => setActive("judgments") },
+          { id: "tab-skills", group: "Tab", label: "Skills", hint: "6", onPick: () => setActive("skills") },
+          // Skills as palette entries — click jumps to Skills + opens
+          // that skill's detail modal.
+          ...skills.slice(0, 30).map((s) => ({
+            id: `skill-${s.name}`,
+            group: "Skill" as const,
+            label: s.name,
+            hint: s.kind || undefined,
+            onPick: () => {
+              setActive("skills");
+              setSkillDetailName(s.name);
+            },
+          })),
+        ]}
+      />
+      <MilestoneConfetti snapshot={milestoneSnap} />
     </main>
   );
 }
