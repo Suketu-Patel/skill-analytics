@@ -878,17 +878,20 @@ export default function DashboardClient() {
           ["judgments", "Judgments"],
           ["skills", "Skills"]
         ].map(([id, label]) => {
-          // Wrapped tab just gets a distinct color (deep violet active,
-          // light violet idle) — no glow, no animation, no gradient.
-          // The color alone is enough to mark it as the shareable view.
+          // Wrapped uses the app's primary accent (teal #0f8f8a) so it
+          // reads as native to the design system rather than a stranger
+          // visiting from a Spotify Wrapped color palette. Active = solid
+          // teal + white text (passes contrast cleanly); idle = white bg
+          // with a teal border and teal text so it still stands out from
+          // the neutral tabs but doesn't shout.
           const isWrapped = id === "wrapped";
           const isActive = active === id;
           const base = "h-9 rounded-md border px-3 text-sm font-medium";
           let cls = "";
           if (isWrapped) {
             cls = isActive
-              ? "border-violet-700 bg-violet-700 text-white"
-              : "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100";
+              ? "border-teal bg-teal text-white"
+              : "border-teal bg-white text-teal hover:bg-teal hover:text-white";
           } else if (isActive) {
             cls = "border-ink bg-ink text-white";
           } else {
