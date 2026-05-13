@@ -5,24 +5,35 @@ import { aggregate, aggregateBy } from "./tokens.js";
 // report "total tokens" should route through here so the numbers match
 // across tabs. Internally pulls (source, raw_token_fields) rows from
 // token_usage and runs them through the tokens.js normalizer.
-function billableTokensTotal(opts = {}) {
+// Project-scope helper. When set, we join token_usage to turns and
+// filter by cwd. Skipped (left join) otherwise so the cheap path stays
+// cheap when no scope is active.
+function tokenRowsForOpts(opts = {}) {
   const tuWhere = whereFilter(opts, "tu");
-  const where = tuWhere ? `WHERE ${tuWhere}` : "";
-  const rows = queryRows(`
+  const needJoin = !!opts?.project;
+  const projectAnd = opts?.project ? ` AND t.cwd = ${sqlString(opts.project)}` : "";
+  const where = [tuWhere].filter(Boolean).join(" AND ");
+  const whereClause = where ? `WHERE ${where}${projectAnd}` : projectAnd ? `WHERE 1=1${projectAnd}` : "";
+  if (needJoin) {
+    return queryRows(`
+      SELECT tu.source, tu.input_tokens, tu.cached_input_tokens, tu.output_tokens, tu.reasoning_output_tokens
+      FROM token_usage tu
+      JOIN turns t ON t.turn_id = tu.turn_id
+      ${whereClause}
+    `);
+  }
+  return queryRows(`
     SELECT source, input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens
-    FROM token_usage tu ${where}
+    FROM token_usage tu ${where ? `WHERE ${where}` : ""}
   `);
-  return aggregate(rows).billable;
+}
+
+function billableTokensTotal(opts = {}) {
+  return aggregate(tokenRowsForOpts(opts)).billable;
 }
 
 function billableTokensBySource(opts = {}) {
-  const tuWhere = whereFilter(opts, "tu");
-  const where = tuWhere ? `WHERE ${tuWhere}` : "";
-  const rows = queryRows(`
-    SELECT source, input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens
-    FROM token_usage tu ${where}
-  `);
-  const groups = aggregateBy(rows, (r) => r.source);
+  const groups = aggregateBy(tokenRowsForOpts(opts), (r) => r.source);
   const out = {};
   for (const [k, v] of groups) out[k] = v.billable;
   return out;
@@ -697,6 +708,14 @@ function safeBasename(cwd) {
 export function getCostOverview(opts = {}) {
   const tuWhere = whereFilter(opts, "tu");
   const tuJoinAnd = tuWhere ? ` AND ${tuWhere}` : "";
+  // Project scope filters to one cwd. Applied on the joined turns row,
+  // not token_usage (token_usage doesn't carry cwd). When set, the
+  // entire payload — headline, byDay, byModel, etc. — is implicitly
+  // about that one project. Useful for "what did iLit cost me last
+  // month" type questions from the ⌘K palette.
+  const projectAnd = opts?.project
+    ? ` AND t.cwd = ${sqlString(opts.project)}`
+    : "";
 
   // Raw per-(day, source, model, cwd, turn) aggregates — we'll price these in
   // JS and then re-aggregate along whichever dimension each card needs.
@@ -719,7 +738,7 @@ export function getCostOverview(opts = {}) {
       COALESCE(tu.reasoning_output_tokens, 0) AS reasoning_output_tokens
     FROM token_usage tu
     LEFT JOIN turns t ON t.turn_id = tu.turn_id
-    WHERE tu.timestamp IS NOT NULL ${tuJoinAnd}
+    WHERE tu.timestamp IS NOT NULL ${tuJoinAnd}${projectAnd}
   `);
 
   // Price every row up-front. Each priced row carries cost_total + the

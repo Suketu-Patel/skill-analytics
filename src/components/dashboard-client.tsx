@@ -457,6 +457,13 @@ export default function DashboardClient() {
   const [updateCommits, setUpdateCommits] = useState<{ sha: string; subject: string }[]>([]);
   // Command palette open state (⌘K toggles).
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Project scope: when set to a cwd string, EVERY endpoint call gets
+  // &project=<cwd> appended, so cost / wrapped / comparison / etc. all
+  // re-scope to just that project. Cleared via the dismiss chip below.
+  const [projectScope, setProjectScope] = useState<string | null>(null);
+  // List of project cwds we know about — populated from cost-overview's
+  // byProject list so the ⌘K palette can offer them.
+  const [knownProjects, setKnownProjects] = useState<{ cwd: string; cwd_short: string; cost: number }[]>([]);
   // Snapshot the milestone-relevant numbers so <MilestoneConfetti> can
   // detect crossings. Pulled from the cost-overview endpoint.
   const [milestoneSnap, setMilestoneSnap] = useState<{
@@ -483,8 +490,11 @@ export default function DashboardClient() {
     if (sourceFilter !== "all") p.set("source", sourceFilter);
     if (dateFrom) p.set("from", `${dateFrom}T00:00:00.000Z`);
     if (dateTo) p.set("to", `${dateTo}T23:59:59.999Z`);
+    // Project scope rides on every metric endpoint call. When set, the
+    // ENTIRE dashboard re-renders against just that one cwd's data.
+    if (projectScope) p.set("project", projectScope);
     return p.toString();
-  }, [sourceFilter, dateFrom, dateTo]);
+  }, [sourceFilter, dateFrom, dateTo, projectScope]);
 
   // Single callback wired to every brush-able chart. Charts call this with
   // a [from, to] day pair after the user drags a horizontal selection.
@@ -636,7 +646,9 @@ export default function DashboardClient() {
       for (const u of urls) {
         fetch(u).catch(() => { /* prefetch is best-effort */ });
       }
-      // Milestone snapshot — reads the same prefetched cost-overview.
+      // Milestone snapshot + project list — reads the same prefetched cost-overview.
+      // Always uses the UNscoped endpoint so the palette shows every project,
+      // not just the currently-scoped one.
       fetch("/api/metrics/cost-overview")
         .then((r) => r.json())
         .then((j) => {
@@ -647,6 +659,15 @@ export default function DashboardClient() {
             saved: Number(h.cache_savings || 0),
             tokens: Number(h.tokens_billable || 0),
           });
+          if (Array.isArray(j.byProject)) {
+            setKnownProjects(
+              j.byProject.map((p: { cwd: string; cwd_short: string; cost: number }) => ({
+                cwd: p.cwd,
+                cwd_short: p.cwd_short,
+                cost: p.cost,
+              }))
+            );
+          }
         })
         .catch(() => {});
     }, 400);
@@ -946,6 +967,33 @@ export default function DashboardClient() {
           time-series charts (see useChartDateBrush). Source filter
           (claude vs codex) still lives here when on Skills, where it
           changes the per-source counts shown in those panels. */}
+
+      {/* Project-scope banner. Only rendered when the user picks a
+          project from ⌘K. Highly visible — bold teal strip — so you
+          never forget the dashboard is filtered. Click ✕ to clear. */}
+      {projectScope && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border-2 border-teal bg-teal/10 px-4 py-2.5">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-teal">
+              Project scope
+            </span>
+            <span className="truncate font-mono text-sm text-ink" title={projectScope}>
+              {knownProjects.find((p) => p.cwd === projectScope)?.cwd_short || projectScope}
+            </span>
+            <span className="hidden text-xs text-slate-500 sm:inline">
+              · entire dashboard filtered to this cwd
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setProjectScope(null)}
+            title="Clear scope (⌘K → All projects)"
+            className="shrink-0 rounded-md border border-teal bg-white px-2.5 py-1 text-xs font-medium text-teal hover:bg-teal hover:text-white"
+          >
+            ✕ Clear
+          </button>
+        </div>
+      )}
 
       <nav
         className="flex flex-wrap gap-2"
@@ -1527,6 +1575,34 @@ export default function DashboardClient() {
           { id: "tab-timeline", group: "Tab", label: "Timeline", hint: "4", onPick: () => setActive("timeline") },
           { id: "tab-judgments", group: "Tab", label: "Judgments", hint: "5", onPick: () => setActive("judgments") },
           { id: "tab-skills", group: "Tab", label: "Skills", hint: "6", onPick: () => setActive("skills") },
+          // "All projects" shortcut to clear an active scope — only
+          // shown when actually scoped, so it doesn't add noise.
+          ...(projectScope
+            ? [{
+                id: "project-all",
+                group: "Project" as const,
+                label: "← Show all projects (clear scope)",
+                hint: "esc scope",
+                onPick: () => {
+                  setProjectScope(null);
+                  setActive("cost");
+                },
+              }]
+            : []),
+          // Every known project becomes a palette entry. Picking one
+          // re-scopes the entire dashboard to that cwd.
+          ...knownProjects.map((p) => ({
+            id: `project-${p.cwd}`,
+            group: "Project" as const,
+            label: p.cwd_short,
+            hint: `$${Math.round(p.cost).toLocaleString()}`,
+            onPick: () => {
+              setProjectScope(p.cwd);
+              // Jump to Cost view so the scoped data is immediately
+              // visible — easy to tell something changed.
+              setActive("cost");
+            },
+          })),
           // Skills as palette entries — click jumps to Skills + opens
           // that skill's detail modal.
           ...skills.slice(0, 30).map((s) => ({
