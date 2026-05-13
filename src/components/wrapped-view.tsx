@@ -95,10 +95,6 @@ export default function WrappedView({ filterQS }: { filterQS: string }) {
   useEffect(() => {
     setLoading(true);
     const qs = filterQS ? `?${filterQS}` : "";
-    // When no date filter is active, use the snapshot endpoint —
-    // pre-computed after every sync, so this returns instantly. When a
-    // filter IS active (user dragged on a chart), the snapshot doesn't
-    // apply; fall back to live endpoints.
     const wrappedPromise = filterQS
       ? Promise.all([
           fetch(`/api/metrics/cost-overview${qs}`).then((r) => r.json()),
@@ -112,7 +108,12 @@ export default function WrappedView({ filterQS }: { filterQS: string }) {
     ])
       .then(([snap, fun]) => {
         if (snap?.ok) {
-          if (snap.cost_overview?.ok) setCost(snap.cost_overview);
+          // Be lenient about what counts as "loaded": as long as a
+          // headline exists, render. The legacy `.ok` check on each
+          // sub-payload silently rejected cached snapshots whose
+          // inner objects don't carry the envelope flag.
+          const co = snap.cost_overview;
+          if (co?.headline) setCost(co);
           setComparison(snap.comparison || null);
         }
         setFunFacts(fun);

@@ -878,29 +878,19 @@ export default function DashboardClient() {
           ["judgments", "Judgments"],
           ["skills", "Skills"]
         ].map(([id, label]) => {
-          // Wrapped is the marquee tab. Two constraints from the redesign:
-          //   1. Glow must be CONSTANT, not hover-only (hover-only made
-          //      it feel like a normal button with a quirky hover state).
-          //   2. When active, keep the violet identity but use a dark
-          //      text color (white-on-light-violet had poor contrast).
-          // We use inline style for the glow so arbitrary-value Tailwind
-          // doesn't have to be configured to recognize it.
           const isWrapped = id === "wrapped";
           const isActive = active === id;
           const base =
-            "h-9 rounded-md border px-3 text-sm font-medium transition-all";
+            "h-9 rounded-md border px-3 text-sm font-medium transition-transform";
           let cls = "";
-          let style: React.CSSProperties | undefined;
           if (isWrapped) {
-            // Always glow, just brighter when active.
-            style = {
-              boxShadow: isActive
-                ? "0 0 14px rgba(168, 85, 247, 0.55)"
-                : "0 0 10px rgba(168, 85, 247, 0.35)",
-            };
+            // The 'wrapped-glow' class (defined in the <style> block
+            // below the nav) drives a multi-layer breathing glow that
+            // animates infinitely — no hover or click required. Active
+            // version pulses brighter + scales up subtly.
             cls = isActive
-              ? "border-violet-500 bg-violet-100 text-violet-900"
-              : "border-violet-400 bg-violet-50 text-violet-800 hover:bg-violet-100";
+              ? "wrapped-glow wrapped-glow-active border-violet-500 bg-gradient-to-r from-violet-100 via-fuchsia-100 to-violet-100 text-violet-900 font-semibold"
+              : "wrapped-glow border-violet-400 bg-gradient-to-r from-violet-50 to-fuchsia-50 text-violet-800 hover:scale-105";
           } else if (isActive) {
             cls = "border-ink bg-ink text-white";
           } else {
@@ -911,13 +901,62 @@ export default function DashboardClient() {
               key={id}
               onClick={() => setActive(id as typeof active)}
               className={`${base} ${cls}`}
-              style={style}
             >
               {label}
             </button>
           );
         })}
       </nav>
+
+      {/* Glow keyframes for the Wrapped tab — multi-layer breathing
+          shadow that always animates. Lives here so it's a peer of the
+          nav element it styles; harmless to inject globally because the
+          selectors are namespaced. */}
+      <style jsx global>{`
+        @keyframes wrapped-pulse {
+          0%, 100% {
+            box-shadow:
+              0 0 0 1px rgba(168, 85, 247, 0.4),
+              0 0 12px rgba(168, 85, 247, 0.35),
+              0 0 24px rgba(217, 70, 239, 0.20);
+          }
+          50% {
+            box-shadow:
+              0 0 0 1px rgba(168, 85, 247, 0.55),
+              0 0 18px rgba(168, 85, 247, 0.55),
+              0 0 36px rgba(217, 70, 239, 0.32);
+          }
+        }
+        @keyframes wrapped-pulse-active {
+          0%, 100% {
+            box-shadow:
+              0 0 0 2px rgba(168, 85, 247, 0.55),
+              0 0 20px rgba(168, 85, 247, 0.6),
+              0 0 40px rgba(217, 70, 239, 0.40);
+            transform: scale(1);
+          }
+          50% {
+            box-shadow:
+              0 0 0 2px rgba(168, 85, 247, 0.8),
+              0 0 28px rgba(168, 85, 247, 0.85),
+              0 0 56px rgba(217, 70, 239, 0.55);
+            transform: scale(1.04);
+          }
+        }
+        .wrapped-glow {
+          animation: wrapped-pulse 2.4s ease-in-out infinite;
+        }
+        .wrapped-glow-active {
+          animation: wrapped-pulse-active 2s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .wrapped-glow,
+          .wrapped-glow-active {
+            animation: none;
+            box-shadow: 0 0 14px rgba(168, 85, 247, 0.45);
+          }
+        }
+      `}</style>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard

@@ -28,12 +28,18 @@ export function precomputeWrappedSnapshot() {
   // No filter — Wrapped always shows the full lifetime view. If the
   // user filters via the date brush, the live endpoint serves a custom
   // payload outside this cache.
+  //
+  // We wrap each sub-payload in {ok: true, ...} so the cached shape is
+  // byte-identical to what the live /api/metrics/* endpoints return.
+  // Without this wrapper the view's `snap.cost_overview?.ok` check
+  // silently fails and the user sees "No data. Run Import first." even
+  // when the snapshot is fresh.
   const cost = getCostOverview({});
   const comparison = getComparisonMetrics({});
   const payload = {
     generated_at: nowIso(),
-    cost_overview: cost,
-    comparison,
+    cost_overview: { ok: true, ...cost },
+    comparison: { ok: true, ...comparison },
   };
   const batch = new SqlBatch();
   batch.add(
