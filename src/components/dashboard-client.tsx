@@ -1000,25 +1000,36 @@ export default function DashboardClient() {
       group: string;
       label: string;
       hint?: string;
+      keywords?: string[];
       onPick: () => void;
     }> = [];
 
-    // — Tabs (filtered to visible). Digit shortcut shown as hint mirrors
-    //   the same source the nav numbering uses, so they always agree.
+    // — Tabs (filtered to visible). Tag with both the digit hint and a
+    //   couple synonyms so e.g. typing "wrapped" or "share" both surface
+    //   the Wrapped tab.
+    const TAB_KEYWORDS: Record<string, string[]> = {
+      cost: ["money", "spend", "tokens", "$", "billing", "usage"],
+      wrapped: ["share", "screenshot", "year in review", "card"],
+      comparison: ["compare", "vs", "codex", "claude", "cursor", "side by side"],
+      timeline: ["chart", "graph", "history", "trend"],
+      judgments: ["judge", "haiku", "drift", "quality"],
+      skills: ["skill", "agent", "tool", "errors", "pricing"],
+      settings: ["preferences", "config", "options", "appearance", "theme", "dark", "light"],
+    };
     visibleTabs.forEach(([id, label], i) => {
       items.push({
         id: `tab-${id}`,
         group: "Tab",
         label,
         hint: String(i + 1),
+        keywords: ["go to", "open", "tab", ...(TAB_KEYWORDS[id] || [])],
         onPick: () => setActive(id),
       });
     });
 
     // — Settings actions. Theme picks + sync-interval presets + region
     //   picks all jump to Settings and broadcast their value via the
-    //   same CustomEvent the SettingsView listens to, so toggles take
-    //   effect without forcing a tab change.
+    //   same CustomEvent the SettingsView listens to.
     const writeSetting = (key: string, value: string, event: string) => {
       try {
         window.localStorage.setItem(key, value);
@@ -1026,28 +1037,46 @@ export default function DashboardClient() {
       } catch { /* localStorage blocked → no-op */ }
     };
     items.push(
-      { id: "settings-open", group: "Settings", label: "Open Settings…", hint: "7", onPick: () => setActive("settings") },
-      { id: "settings-theme-light", group: "Settings", label: "Theme: Light", onPick: () => {
-        writeSetting("dashboard.theme", "light", "dashboard:theme");
-        document.documentElement.classList.remove("dark");
-      } },
-      { id: "settings-theme-dark", group: "Settings", label: "Theme: Dark", onPick: () => {
-        writeSetting("dashboard.theme", "dark", "dashboard:theme");
-        document.documentElement.classList.add("dark");
-      } },
-      { id: "settings-theme-system", group: "Settings", label: "Theme: System", onPick: () => {
-        writeSetting("dashboard.theme", "system", "dashboard:theme");
-        const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        document.documentElement.classList.toggle("dark", dark);
-      } },
+      { id: "settings-open", group: "Settings", label: "Open Settings…", hint: "7",
+        keywords: ["preferences", "config", "options"],
+        onPick: () => setActive("settings") },
+      { id: "settings-theme-light", group: "Theme", label: "Theme: Light",
+        keywords: ["light", "bright", "white", "appearance"],
+        onPick: () => {
+          writeSetting("dashboard.theme", "light", "dashboard:theme");
+          document.documentElement.classList.remove("dark");
+        } },
+      { id: "settings-theme-dark", group: "Theme", label: "Theme: Dark",
+        keywords: ["dark", "night", "black", "appearance"],
+        onPick: () => {
+          writeSetting("dashboard.theme", "dark", "dashboard:theme");
+          document.documentElement.classList.add("dark");
+        } },
+      { id: "settings-theme-system", group: "Theme", label: "Theme: System",
+        keywords: ["auto", "system", "os", "appearance"],
+        onPick: () => {
+          writeSetting("dashboard.theme", "system", "dashboard:theme");
+          const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+        } },
     );
 
     // — Region picks (drives AI fun-fact metaphors).
+    const REGION_KEYWORDS: Record<string, string[]> = {
+      US: ["united states", "america", "usa", "dollars"],
+      IN: ["india", "indian", "inr", "rupee", "rupees", "₹"],
+      UK: ["united kingdom", "britain", "british", "pounds", "gbp", "£"],
+      EU: ["europe", "european", "euros", "eur", "€"],
+      JP: ["japan", "japanese", "yen", "jpy", "¥"],
+      AU: ["australia", "australian", "aud"],
+      GLOBAL: ["global", "international", "world", "neutral"],
+    };
     (["US", "IN", "UK", "EU", "JP", "AU", "GLOBAL"] as const).forEach((r) => {
       items.push({
         id: `region-${r}`,
         group: "Region",
         label: `Region: ${r}`,
+        keywords: ["fun facts", "tidbits", "currency", "metaphors", ...(REGION_KEYWORDS[r] || [])],
         onPick: () => {
           window.localStorage.setItem("dashboard.region", r);
           window.dispatchEvent(new CustomEvent("dashboard:region", { detail: r }));
@@ -1055,20 +1084,49 @@ export default function DashboardClient() {
       });
     });
 
-    // — Source filter picks. Mirrors the FilterBar pills, gated to the
-    //   sources the user actually opted into (Settings → Sources). "All"
-    //   stays available even when sources are hidden — it just resolves
-    //   to "all visible" when consumers honor visibleSourceIds.
+    // — Source filter picks AND per-source hide/show actions. The big
+    //   smart-palette unlock: typing "cursor" surfaces *everything*
+    //   cursor-related — filter, hide-from-settings, show-from-settings,
+    //   comparison jump — without the user having to remember where any
+    //   of those live.
+    const SOURCE_SYNONYMS: Record<SourceId, string[]> = {
+      codex: ["codex", "openai", "gpt", "chatgpt"],
+      claude: ["claude", "anthropic", "haiku", "sonnet", "opus"],
+      cursor: ["cursor", "ide"],
+    };
     (Object.keys(SOURCE_LABEL) as SourceFilter[])
       .filter((s) => s === "all" || !hiddenSources.includes(s as SourceId))
       .forEach((s) => {
+        const syn = s === "all" ? ["all", "everything", "both"] : SOURCE_SYNONYMS[s as SourceId];
         items.push({
           id: `source-${s}`,
           group: "Source filter",
-          label: `Source: ${SOURCE_LABEL[s]}`,
+          label: `Filter source: ${SOURCE_LABEL[s]}`,
+          keywords: ["source", "filter", "only", ...syn],
           onPick: () => setSourceFilter(s),
         });
       });
+    // Hide/Show actions per source — typing "cursor" should find the
+    // disable toggle just as easily as "Settings → Sources" does.
+    ALL_SOURCES.forEach((s) => {
+      const hidden = hiddenSources.includes(s);
+      const syn = SOURCE_SYNONYMS[s] || [];
+      const label = SOURCE_LABEL[s as SourceFilter];
+      const toggle = () => {
+        const next = hidden ? hiddenSources.filter((x) => x !== s) : [...hiddenSources, s];
+        try {
+          window.localStorage.setItem("dashboard.hiddenSources", JSON.stringify(next));
+          window.dispatchEvent(new CustomEvent("dashboard:hidden-sources", { detail: next }));
+        } catch { /* ignore */ }
+      };
+      items.push({
+        id: `source-toggle-${s}`,
+        group: "Source visibility",
+        label: hidden ? `Show ${label} everywhere` : `Hide ${label} everywhere`,
+        keywords: ["disable", "enable", "toggle", "settings", "sources", ...syn],
+        onPick: toggle,
+      });
+    });
 
     // — Sync-interval presets.
     [10, 15, 30, 60, 120].forEach((m) => {
@@ -1076,6 +1134,7 @@ export default function DashboardClient() {
         id: `sync-${m}`,
         group: "Sync interval",
         label: `Auto-sync every ${m} min`,
+        keywords: ["interval", "refresh", "background", "import", "cadence"],
         onPick: () => writeSetting("dashboard.syncIntervalMinutes", String(m), "dashboard:sync-interval"),
       });
     });
@@ -1083,10 +1142,11 @@ export default function DashboardClient() {
       id: "sync-off",
       group: "Sync interval",
       label: "Auto-sync off",
+      keywords: ["disable", "stop", "pause", "off", "manual"],
       onPick: () => writeSetting("dashboard.syncIntervalMinutes", "0", "dashboard:sync-interval"),
     });
 
-    // — Date range presets. Wire to the same setters the GlobalDateRange uses.
+    // — Date range presets.
     const presetDays = (days: number) => {
       const to = new Date();
       const from = new Date();
@@ -1095,19 +1155,25 @@ export default function DashboardClient() {
       setDateTo(to.toISOString().slice(0, 10));
     };
     items.push(
-      { id: "date-7d", group: "Date range", label: "Last 7 days", onPick: () => presetDays(7) },
-      { id: "date-30d", group: "Date range", label: "Last 30 days", onPick: () => presetDays(30) },
-      { id: "date-90d", group: "Date range", label: "Last 90 days", onPick: () => presetDays(90) },
-      { id: "date-clear", group: "Date range", label: "Clear date filter", onPick: () => { setDateFrom(""); setDateTo(""); } },
+      { id: "date-7d", group: "Date range", label: "Last 7 days",
+        keywords: ["week", "recent", "filter"], onPick: () => presetDays(7) },
+      { id: "date-30d", group: "Date range", label: "Last 30 days",
+        keywords: ["month", "filter"], onPick: () => presetDays(30) },
+      { id: "date-90d", group: "Date range", label: "Last 90 days",
+        keywords: ["quarter", "3 months", "filter"], onPick: () => presetDays(90) },
+      { id: "date-clear", group: "Date range", label: "Clear date filter",
+        keywords: ["reset", "remove", "all time"],
+        onPick: () => { setDateFrom(""); setDateTo(""); } },
     );
 
-    // — Project scope. "Show all" only when scoped (otherwise noise).
+    // — Project scope.
     if (projectScope) {
       items.push({
         id: "project-all",
         group: "Project",
         label: "← Show all projects (clear scope)",
         hint: "Esc",
+        keywords: ["clear", "reset", "all"],
         onPick: () => { setProjectScope(null); setActive("cost"); },
       });
     }
@@ -1117,29 +1183,40 @@ export default function DashboardClient() {
         group: "Project",
         label: p.cwd_short,
         hint: `$${Math.round(p.cost).toLocaleString()}`,
+        keywords: ["scope", "cwd", "project", "folder", "repo"],
         onPick: () => { setProjectScope(p.cwd); setActive("cost"); },
       });
     });
 
-    // — Panel anchors inside the Cost & Tokens view. Picking jumps to
-    //   that tab and scrolls the anchor into view via location.hash.
-    [
-      ["daily-spend", "Cost: Daily Spend"],
-      ["claude-vs-codex", "Cost: Claude vs Codex"],
-      ["cache-effectiveness", "Cost: Cache Effectiveness"],
-      ["burn-alerts", "Cost: Burn Alerts"],
-      ["spend-by-model", "Cost: Spend by Model"],
-      ["spend-by-project", "Cost: Spend by Project"],
-      ["hour-of-day", "Cost: Hour of Day"],
-      ["top-sessions", "Cost: Most Expensive Sessions"],
-    ].forEach(([anchor, label]) => {
+    // — Panel anchors inside the Cost & Tokens view.
+    const ANCHOR_KW: Record<string, string[]> = {
+      "daily-spend": ["chart", "graph", "trend", "$", "money"],
+      "claude-vs-codex": ["pie", "split", "compare"],
+      "cache-effectiveness": ["cache", "savings", "saved", "hit rate"],
+      "burn-alerts": ["spike", "expensive", "outlier"],
+      "spend-by-model": ["model", "opus", "sonnet", "haiku", "gpt"],
+      "spend-by-project": ["project", "cwd", "folder"],
+      "hour-of-day": ["time", "hour", "when", "schedule"],
+      "top-sessions": ["session", "expensive", "biggest"],
+    };
+    (Object.entries(ANCHOR_KW) as [string, string[]][]).forEach(([anchor, kws]) => {
+      const labelMap: Record<string, string> = {
+        "daily-spend": "Cost: Daily Spend",
+        "claude-vs-codex": "Cost: Claude vs Codex",
+        "cache-effectiveness": "Cost: Cache Effectiveness",
+        "burn-alerts": "Cost: Burn Alerts",
+        "spend-by-model": "Cost: Spend by Model",
+        "spend-by-project": "Cost: Spend by Project",
+        "hour-of-day": "Cost: Hour of Day",
+        "top-sessions": "Cost: Most Expensive Sessions",
+      };
       items.push({
         id: `anchor-${anchor}`,
         group: "Panel",
-        label,
+        label: labelMap[anchor],
+        keywords: ["jump", "scroll", "panel", "cost", ...kws],
         onPick: () => {
           setActive("cost");
-          // Defer to next tick so the cost panel mounts before we scroll.
           window.setTimeout(() => {
             const el = document.getElementById(anchor);
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1149,6 +1226,28 @@ export default function DashboardClient() {
       });
     });
 
+    // — Top-level actions worth surfacing on common typed words.
+    items.push(
+      {
+        id: "action-import",
+        group: "Actions",
+        label: "Import / Sync now",
+        hint: "⌘I",
+        keywords: ["refresh", "reload", "fetch", "import", "sync", "update"],
+        onPick: () => { if (!importing) runImport(); },
+      },
+      {
+        id: "action-refresh-pricing",
+        group: "Actions",
+        label: "Refresh pricing accuracy",
+        keywords: ["price", "pricing", "rates", "validate", "websearch", "current"],
+        onPick: () => {
+          fetch("/api/pricing/validate?force=1", { method: "POST" }).catch(() => {});
+          setActive("settings");
+        },
+      },
+    );
+
     // — Skills (capped at 30 to keep the palette snappy; query
     //   narrows further).
     skills.slice(0, 30).forEach((s) => {
@@ -1157,13 +1256,21 @@ export default function DashboardClient() {
         group: "Skill",
         label: s.name,
         hint: s.kind || undefined,
+        // Path + category + source so typing the path or "agent" /
+        // "plugin" finds the right skill.
+        keywords: [
+          s.kind || "",
+          s.category || "",
+          s.source || "",
+          s.project || "",
+        ].filter(Boolean),
         onPick: () => { setActive("skills"); setSkillDetailName(s.name); },
       });
     });
 
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleTabs, knownProjects, skills, projectScope, hiddenSources]);
+  }, [visibleTabs, knownProjects, skills, projectScope, hiddenSources, importing]);
 
   const filteredSkills = useMemo(() => {
     const text = query.trim().toLowerCase();

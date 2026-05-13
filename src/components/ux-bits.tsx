@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Skeleton ────────────────────────────────────────────────────────────
 //
@@ -289,8 +289,114 @@ export type PaletteItem = {
   label: string;
   hint?: string;
   group: string;
+  // Free-form match tags. Typing any of these surfaces the item even
+  // when the label doesn't contain the typed text. Example: a "Source:
+  // Cursor" item tagged with ["cursor", "ide"] surfaces when the user
+  // types either "cursor" or "ide".
+  keywords?: string[];
   onPick: () => void;
 };
+
+// ─── matching ───────────────────────────────────────────────────────────
+//
+// Score-based search. For each item we compute the best score across
+// label / group / keywords / hint using a couple of heuristics:
+//
+//   exact match              → 1000
+//   prefix match              → 500
+//   substring match            → 200 - position (earlier = better)
+//   fuzzy subsequence match     → 50 + density bonus
+//   recency boost            → +120  (item picked within the last ~12 picks)
+//
+// Items below the threshold are dropped entirely; the rest are sorted
+// by score descending, then by original insertion order for stability.
+// "Smart" doesn't mean LLM-backed — it means the right rules so the
+// obvious top hit actually shows up first.
+
+const RECENCY_KEY = "dashboard.paletteRecency";
+const RECENCY_LIMIT = 12;
+
+function readRecency(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENCY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecency(id: string) {
+  if (typeof window === "undefined") return;
+  const cur = readRecency().filter((x) => x !== id);
+  cur.unshift(id);
+  cur.length = Math.min(cur.length, RECENCY_LIMIT);
+  try { window.localStorage.setItem(RECENCY_KEY, JSON.stringify(cur)); } catch { /* ignore */ }
+}
+
+function fuzzySubsequenceScore(haystack: string, needle: string): number {
+  // Returns 0 if `needle` isn't a subsequence of `haystack`. Otherwise:
+  // 50 base + a density bonus (smaller matched span = higher score).
+  if (!needle) return 0;
+  let i = 0;
+  let firstHit = -1;
+  let lastHit = -1;
+  for (let h = 0; h < haystack.length && i < needle.length; h++) {
+    if (haystack[h] === needle[i]) {
+      if (firstHit === -1) firstHit = h;
+      lastHit = h;
+      i += 1;
+    }
+  }
+  if (i !== needle.length) return 0;
+  const span = lastHit - firstHit + 1;
+  const density = needle.length / span; // 1.0 = perfect contiguous
+  return 50 + Math.round(density * 40);
+}
+
+function scoreItem(it: PaletteItem, q: string, recencyRank: number): number {
+  if (!q) return 1000 - recencyRank; // empty query → keep insertion + recency
+  const needle = q.toLowerCase();
+  const label = it.label.toLowerCase();
+  const group = it.group.toLowerCase();
+  const hint = (it.hint || "").toLowerCase();
+  const kws = (it.keywords || []).map((k) => k.toLowerCase());
+
+  let best = 0;
+
+  // Exact / prefix / substring on label (the strongest signal).
+  if (label === needle) best = Math.max(best, 1000);
+  else if (label.startsWith(needle)) best = Math.max(best, 500);
+  else {
+    const idx = label.indexOf(needle);
+    if (idx >= 0) best = Math.max(best, 200 - Math.min(idx, 150));
+  }
+
+  // Same scoring on keywords (slightly discounted vs label).
+  for (const k of kws) {
+    if (k === needle) best = Math.max(best, 900);
+    else if (k.startsWith(needle)) best = Math.max(best, 420);
+    else if (k.includes(needle)) best = Math.max(best, 180);
+  }
+
+  // Group / hint as weaker substring hits.
+  if (group.includes(needle)) best = Math.max(best, 90);
+  if (hint.includes(needle)) best = Math.max(best, 60);
+
+  // Fallback: fuzzy subsequence on label so "cmpre" → "Comparison".
+  if (best < 50) {
+    const fuzz = fuzzySubsequenceScore(label, needle);
+    if (fuzz > 0) best = Math.max(best, fuzz);
+  }
+
+  // Recency boost — only meaningful if we actually matched.
+  if (best > 0 && recencyRank >= 0) {
+    best += Math.max(0, 120 - recencyRank * 10);
+  }
+  return best;
+}
 
 export function CommandPalette({
   open,
@@ -303,6 +409,7 @@ export function CommandPalette({
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
+  const [recency, setRecency] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -311,19 +418,21 @@ export function CommandPalette({
       setActive(0);
       return;
     }
+    setRecency(readRecency());
     const t = window.setTimeout(() => inputRef.current?.focus(), 30);
     return () => window.clearTimeout(t);
   }, [open]);
 
-  const filtered = items.filter((it) => {
-    if (!q) return true;
-    const needle = q.toLowerCase();
-    return (
-      it.label.toLowerCase().includes(needle) ||
-      it.group.toLowerCase().includes(needle) ||
-      (it.hint || "").toLowerCase().includes(needle)
-    );
-  });
+  const filtered = useMemo(() => {
+    const scored = items
+      .map((it) => {
+        const rank = recency.indexOf(it.id);
+        return { it, score: scoreItem(it, q, rank) };
+      })
+      .filter(({ score }) => score > (q ? 25 : 0));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map(({ it }) => it);
+  }, [items, q, recency]);
 
   const onKey = useCallback(
     (e: React.KeyboardEvent) => {
@@ -340,6 +449,7 @@ export function CommandPalette({
         e.preventDefault();
         const pick = filtered[active];
         if (pick) {
+          pushRecency(pick.id);
           pick.onPick();
           onClose();
         }
@@ -392,6 +502,7 @@ export function CommandPalette({
                       key={it.id}
                       onMouseEnter={() => setActive(filtered.indexOf(it))}
                       onClick={() => {
+                        pushRecency(it.id);
                         it.onPick();
                         onClose();
                       }}
