@@ -605,6 +605,72 @@ export default function DashboardClient() {
     };
   }, []);
 
+  // Prefetch endpoints for tabs the user hasn't opened yet, so switching
+  // is instantaneous. Browser cache picks these up; the per-tab views
+  // fire the same fetches and get cache hits. Fires once on mount with
+  // a small delay so the initial paint isn't competing with these.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const urls = [
+        "/api/metrics/cost-overview",
+        "/api/metrics/wrapped",
+        "/api/metrics/comparison",
+        "/api/metrics/judgments",
+        "/api/metrics/fun-facts",
+      ];
+      for (const u of urls) {
+        fetch(u).catch(() => { /* prefetch is best-effort */ });
+      }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, []);
+
+  // Keyboard shortcuts. 1–6 jumps tabs, ⌘I (or Ctrl+I) imports, "/"
+  // focuses the Skills search box, ⌘K is reserved for a future palette.
+  // Disabled when the user is typing in an input / textarea so we don't
+  // hijack normal text editing.
+  useEffect(() => {
+    const tabsByDigit: Record<string, typeof active> = {
+      "1": "cost",
+      "2": "wrapped",
+      "3": "comparison",
+      "4": "timeline",
+      "5": "judgments",
+      "6": "skills",
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const inField =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      // ⌘I / Ctrl+I always — even from inputs — to import without losing focus.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "i") {
+        e.preventDefault();
+        if (!importing) runImport();
+        return;
+      }
+      if (inField) return;
+      if (e.key === "/" && active === "skills") {
+        const el = document.getElementById("skills-search") as HTMLInputElement | null;
+        if (el) {
+          e.preventDefault();
+          el.focus();
+          el.select();
+        }
+        return;
+      }
+      if (tabsByDigit[e.key]) {
+        e.preventDefault();
+        setActive(tabsByDigit[e.key]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, importing]);
+
   // Auto-sync every 30 minutes while the tab is open. Skip if a manual
   // import is already in flight (avoids overlapping POSTs and the
   // associated VACUUM contention on SQLite). The setInterval is paused
@@ -763,30 +829,19 @@ export default function DashboardClient() {
             computed from the JSONL transcripts already on your machine.
           </p>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
-          <div className="relative min-w-0 flex-1 sm:flex-none">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-            />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter skills or errors"
-              className="h-10 w-full rounded-md border border-line bg-white pl-9 pr-3 text-sm outline-none focus:border-teal sm:w-64"
-            />
-          </div>
+        {/* Header right rail: three controls only. Used to be five
+            (search + sync + update + refresh + import) which overflowed
+            to a second line on common laptop widths. The search lived
+            here from the skill-centric era and is now part of the
+            Skills tab's FilterBar; the manual Refresh is redundant
+            since Import already calls loadData() after it completes. */}
+        <div className="flex shrink-0 items-center gap-2">
           <SyncStatus
             lastSyncedAt={lastSyncedAt}
             importing={importing}
             autoSyncEnabled={autoSyncEnabled}
             onToggle={() => setAutoSyncEnabled((v) => !v)}
           />
-          {/* Update button is always visible — simpler than gating on a
-              successful upstream check (which silently broke for repos
-              that aren't standalone clones, like the in-development iLit
-              copy of this code). When commits ARE available the button
-              glows amber; otherwise it's a normal button. */}
           {(() => {
             const hasUpdate = !!(updateAvailable && updateAvailable > 0);
             return (
@@ -815,19 +870,13 @@ export default function DashboardClient() {
             );
           })()}
           <button
-            onClick={loadData}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal"
-          >
-            <RefreshCw size={16} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
-          <button
             onClick={runImport}
             disabled={importing}
+            title="Re-scan ~/.claude and ~/.codex transcripts (⌘I)"
             className="inline-flex h-10 items-center gap-2 rounded-md bg-ink px-3 text-sm font-medium text-white hover:bg-teal disabled:cursor-wait disabled:opacity-70"
           >
             <Database size={16} />
-            {importing ? "Importing" : "Import"}
+            <span className="hidden sm:inline">{importing ? "Importing" : "Import"}</span>
           </button>
         </div>
         {importError && (
@@ -854,7 +903,10 @@ export default function DashboardClient() {
           (claude vs codex) still lives here when on Skills, where it
           changes the per-source counts shown in those panels. */}
 
-      <nav className="flex flex-wrap gap-2">
+      <nav
+        className="flex flex-wrap gap-2"
+        aria-label="Dashboard sections (1–6 to jump)"
+      >
         {[
           // Post-pivot nav: Cost & Tokens is the center stage. Wrapped
           // is the shareable view. Comparison, Timeline, Judgments stay.
@@ -867,16 +919,11 @@ export default function DashboardClient() {
           ["timeline", "Timeline"],
           ["judgments", "Judgments"],
           ["skills", "Skills"]
-        ].map(([id, label]) => {
-          // Wrapped uses the app's primary accent (teal #0f8f8a) so it
-          // reads as native to the design system rather than a stranger
-          // visiting from a Spotify Wrapped color palette. Active = solid
-          // teal + white text (passes contrast cleanly); idle = white bg
-          // with a teal border and teal text so it still stands out from
-          // the neutral tabs but doesn't shout.
+        ].map(([id, label], i) => {
           const isWrapped = id === "wrapped";
           const isActive = active === id;
-          const base = "h-9 rounded-md border px-3 text-sm font-medium";
+          const base =
+            "group inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors";
           let cls = "";
           if (isWrapped) {
             cls = isActive
@@ -887,13 +934,27 @@ export default function DashboardClient() {
           } else {
             cls = "border-line bg-white text-slate-600 hover:border-teal";
           }
+          // Small numeric hint shows the keyboard shortcut. Dimmed
+          // unless hovered/active — discoverable, not noisy.
+          const digit = i + 1;
           return (
             <button
               key={id}
               onClick={() => setActive(id as typeof active)}
               className={`${base} ${cls}`}
+              title={`Jump with ${digit}`}
+              aria-keyshortcuts={String(digit)}
             >
-              {label}
+              <span>{label}</span>
+              <kbd
+                className={`hidden rounded px-1 text-[10px] tabular-nums sm:inline ${
+                  isActive
+                    ? "bg-white/20 text-white/80"
+                    : "bg-slate-100 text-slate-400 group-hover:bg-slate-200"
+                }`}
+              >
+                {digit}
+              </kbd>
             </button>
           );
         })}
@@ -940,23 +1001,42 @@ export default function DashboardClient() {
       {active === "wrapped" && <WrappedView filterQS={filterQS} />}
 
       {active === "skills" && (
-        <FilterBar
-          skills={skills}
-          projects={projects}
-          category={categoryFilter}
-          project={projectFilter}
-          hideUnused={hideUnused}
-          source={sourceFilter}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onCategory={setCategoryFilter}
-          onProject={setProjectFilter}
-          onHideUnused={setHideUnused}
-          onSource={setSourceFilter}
-          onDateFrom={setDateFrom}
-          onDateTo={setDateTo}
-          filteredCount={filteredSkills.length}
-        />
+        <div className="flex flex-col gap-3">
+          {/* Skill-scoped free-text search lives inside the Skills tab
+              now (used to be in the global header). Keeps the cost
+              experience uncluttered. Press "/" anywhere on this tab to
+              focus the input. */}
+          <div className="relative">
+            <Search
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              id="skills-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter skills or errors  (press /)"
+              className="h-10 w-full rounded-md border border-line bg-white pl-9 pr-3 text-sm outline-none focus:border-teal sm:w-72"
+            />
+          </div>
+          <FilterBar
+            skills={skills}
+            projects={projects}
+            category={categoryFilter}
+            project={projectFilter}
+            hideUnused={hideUnused}
+            source={sourceFilter}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onCategory={setCategoryFilter}
+            onProject={setProjectFilter}
+            onHideUnused={setHideUnused}
+            onSource={setSourceFilter}
+            onDateFrom={setDateFrom}
+            onDateTo={setDateTo}
+            filteredCount={filteredSkills.length}
+          />
+        </div>
       )}
 
       {(active === "skills" || active === "overview") && (
