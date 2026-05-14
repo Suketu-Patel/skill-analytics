@@ -377,10 +377,16 @@ function scoreItem(it: PaletteItem, q: string, recencyRank: number): number {
   if (group.includes(needle)) best = Math.max(best, 90);
   if (hint.includes(needle)) best = Math.max(best, 60);
 
-  // Fallback: fuzzy subsequence on label so "cmpre" → "Comparison".
+  // Fallback: fuzzy subsequence on label AND keywords so "cmpre" can
+  // surface "Comparison" via its `compare` keyword. Keyword fuzz is
+  // discounted slightly (×0.9) so a label-fuzz match still wins ties.
   if (best < 50) {
     const fuzz = fuzzySubsequenceScore(label, needle);
     if (fuzz > 0) best = Math.max(best, fuzz);
+    for (const k of kws) {
+      const kf = fuzzySubsequenceScore(k, needle);
+      if (kf > 0) best = Math.max(best, Math.round(kf * 0.9));
+    }
   }
 
   // Recency boost — only meaningful if we actually matched.

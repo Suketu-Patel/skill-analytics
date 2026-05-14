@@ -204,14 +204,30 @@ export default function ContributorsButton() {
                 </p>
               ) : (
                 <>
-                  {/* Podium — only when we have at least 2 contributors,
-                       otherwise it looks lonely. */}
+                  {/* Podium — at least 2 contributors. Grid columns
+                       match the number we actually have so a 2-person
+                       podium doesn't leave a gaping third column. With
+                       3+, the order is 2nd / 1st / 3rd so the gold
+                       medal sits in the middle like an Olympic podium. */}
                   {podium.length >= 2 && (
-                    <div className="mb-5 grid grid-cols-3 items-end gap-3">
-                      {/* 2nd, 1st, 3rd — visually staggered as on a real podium */}
-                      {podium[1] && <PodiumCard c={podium[1]} place={2} />}
-                      {podium[0] && <PodiumCard c={podium[0]} place={1} />}
-                      {podium[2] && <PodiumCard c={podium[2]} place={3} />}
+                    <div
+                      className={`mb-5 grid items-end gap-3 ${
+                        podium.length === 2 ? "grid-cols-2 justify-center" : "grid-cols-3"
+                      }`}
+                    >
+                      {podium.length === 2 ? (
+                        <>
+                          {/* 1st on the left, 2nd on the right — no fake middle */}
+                          <PodiumCard c={podium[0]} place={1} />
+                          <PodiumCard c={podium[1]} place={2} />
+                        </>
+                      ) : (
+                        <>
+                          <PodiumCard c={podium[1]} place={2} />
+                          <PodiumCard c={podium[0]} place={1} />
+                          {podium[2] && <PodiumCard c={podium[2]} place={3} />}
+                        </>
+                      )}
                     </div>
                   )}
 

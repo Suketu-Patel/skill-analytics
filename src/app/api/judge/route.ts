@@ -43,7 +43,11 @@ export async function POST(req: Request) {
   // bug. Clamp to [1, MAX_LIMIT] and reject obviously bogus input.
   const limitRaw = url.searchParams.get("limit");
   const defaultLimit = DEFAULT_LIMITS[judge as "haiku" | "codex"];
-  let limit = defaultLimit;
+  // Explicit `number` type — without it TS infers `5 | 10` from the
+  // literal-typed DEFAULT_LIMITS table, and the Math.min clamp below
+  // (a regular number) won't fit. Production build catches this; dev
+  // doesn't type-check API routes the same way.
+  let limit: number = defaultLimit;
   if (limitRaw != null) {
     const parsed = Number(limitRaw);
     if (!Number.isFinite(parsed) || parsed <= 0) {

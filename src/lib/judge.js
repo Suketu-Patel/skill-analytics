@@ -249,6 +249,8 @@ export async function callCodex(prompt) {
  * Anomaly priority: invocations with a "correction" event in the same
  * (skill_name, turn_id) win over the rest, so the cheap judge is spent
  * where it's most informative.
+ *
+ * @param {{ judge?: "haiku" | "codex", limit?: number, skill?: string | null }} [opts]
  */
 export function unjudgedInvocations({ judge = "haiku", limit = 10, skill = null } = {}) {
   initDb();
@@ -294,6 +296,8 @@ export function unjudgedInvocations({ judge = "haiku", limit = 10, skill = null 
  *
  * Inside a priority bucket, prefer the most recent invocations so codex
  * weighs in on current behavior, not stale history.
+ *
+ * @param {{ limit?: number, skill?: string | null }} [opts]
  */
 export function codexTiebreakerCandidates({ limit = 5, skill = null } = {}) {
   initDb();

@@ -1685,7 +1685,10 @@ export default function DashboardClient() {
         </div>
       )}
 
-      {((active === "skills" && skillsSubtab === "top") || active === "overview") && (
+      {/* "overview" was a deprecated tab id that was removed from the
+       *  active union but the original render-gate kept it for back-
+       *  compat. Stripped because the type narrowing now flags it. */}
+      {active === "skills" && skillsSubtab === "top" && (
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="panel p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -2081,8 +2084,12 @@ export default function DashboardClient() {
                   <AreaChart data={timeline} {...tokenBrush.chartProps}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#d8dde3" />
                     <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip />
+                    {/* Without tickFormatter the raw ints (e.g. 300000000)
+                     *  overflow the axis margin and render clipped as
+                     *  "30000000" / "0000000". formatTokens produces
+                     *  compact labels ("300M"). */}
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => formatTokens(Number(v))} width={60} />
+                    <Tooltip formatter={(v: number) => formatNumber(v)} />
                     <Area type="monotone" dataKey="tokens" stroke="#6157a8" fill="#6157a8" fillOpacity={0.2} />
                     {tokenBrush.selectionOverlay()}
                   </AreaChart>

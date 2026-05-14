@@ -13,7 +13,7 @@ import ContributorsButton from "./contributors-modal";
 // the credit + contributors list one click away from anywhere.
 export default function GlobalFooter() {
   return (
-    <footer className="mt-6 flex flex-wrap items-center justify-center gap-1 border-t border-line bg-slate-50/60 px-4 py-3 text-center text-[11px] text-slate-500">
+    <footer className="mt-6 flex flex-wrap items-center justify-center gap-1 border-t border-line bg-slate-50 px-4 py-3 text-center text-[11px] text-slate-500">
       <span>Made by</span>
       <a
         href="https://github.com/Suketu-Patel/skill-analytics"
