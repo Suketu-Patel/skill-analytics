@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { resolveRegion } from "./settings-view";
+import { readPrefs, usePrefs } from "./use-prefs";
 import {
   Area,
   AreaChart,
@@ -335,21 +336,22 @@ export default function CostOverviewView({
   // (`anonAlias` is computed via useMemo further down once `data` is in
   // scope — declared here so the helper is in scope for both panels.)
 
-  // Anonymize project names everywhere on the Cost view when the user
-  // (or a screenshot script) sets `localStorage["dashboard.anonymize"]
-  // = "1"`. Mirrors the Wrapped tab's existing toggle — useful when
-  // sharing screenshots without leaking real project paths.
-  // SSR-safe: starts false, hydrates in the effect below.
+  // Anonymize project names everywhere on the Cost view. Backed by the
+  // server-side prefs store (DB) — see src/components/use-prefs.ts.
+  // Mirrors the Wrapped tab's anonymize toggle: useful when sharing
+  // screenshots without leaking real project paths.
+  // SSR-safe: starts false, hydrates from /api/prefs in the effect below.
+  usePrefs();
   const [anonymize, setAnonymize] = useState(false);
   useEffect(() => {
-    const read = () => {
-      try { return window.localStorage.getItem("dashboard.anonymize") === "1"; }
-      catch { return false; }
-    };
-    setAnonymize(read());
-    const onChange = () => setAnonymize(read());
+    setAnonymize(!!readPrefs().anonymize);
+    const onChange = () => setAnonymize(!!readPrefs().anonymize);
     window.addEventListener("dashboard:anonymize", onChange);
-    return () => window.removeEventListener("dashboard:anonymize", onChange);
+    window.addEventListener("dashboard:prefs", onChange);
+    return () => {
+      window.removeEventListener("dashboard:anonymize", onChange);
+      window.removeEventListener("dashboard:prefs", onChange);
+    };
   }, []);
 
   const [region, setRegion] = useState<string>("US");

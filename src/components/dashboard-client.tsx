@@ -2,7 +2,8 @@
 
 import CostOverviewView from "./cost-overview-view";
 import GlobalFooter from "./global-footer";
-import { ALL_SOURCES, readHiddenSources, type SourceId } from "./settings-view";
+import { ALL_SOURCES, readHiddenSources, readHiddenTabs, readSyncIntervalMinutes, type SourceId } from "./settings-view";
+import { setPref, usePrefs } from "./use-prefs";
 import JudgmentsView from "./judgments-view";
 import SettingsView from "./settings-view";
 import { useChartDateBrush } from "./use-chart-date-brush";
@@ -479,17 +480,10 @@ export default function DashboardClient() {
   // all tabs for one paint, then the hidden ones disappear — acceptable.
   const [hiddenTabs, setHiddenTabs] = useState<string[]>([]);
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("dashboard.hiddenTabs");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setHiddenTabs(parsed.filter((s) => typeof s === "string"));
-        }
-      }
-    } catch { /* localStorage blocked → keep [] */ }
-    // Settings broadcasts hidden-tab changes via a CustomEvent so we
-    // don't have to lift the state up or use context.
+    // Read from the prefs cache once it loads; setPref + the loader
+    // both fire the legacy "dashboard:hidden-tabs" event so this
+    // single listener handles both initial hydrate AND user toggles.
+    setHiddenTabs(readHiddenTabs());
     const onChange = (e: Event) => {
       const next = (e as CustomEvent<string[]>).detail;
       if (Array.isArray(next)) setHiddenTabs(next);
@@ -578,14 +572,12 @@ export default function DashboardClient() {
   // One-shot "just refreshed" toast. Shown for ~2s after a sync
   // completes so the user knows the screen they're looking at is fresh.
   const [justRefreshed, setJustRefreshed] = useState(false);
+  // Ensure the prefs cache loads (the hook subscribes everywhere
+  // including SettingsView; calling it here is enough to start hydration
+  // if SettingsView isn't mounted yet).
+  usePrefs();
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem("dashboard.syncIntervalMinutes");
-      if (raw != null) {
-        const n = Number(raw);
-        if (Number.isFinite(n)) setSyncIntervalMin(n <= 0 ? 0 : Math.max(10, Math.round(n)));
-      }
-    } catch { /* keep default */ }
+    setSyncIntervalMin(readSyncIntervalMinutes());
     const onChange = (e: Event) => {
       const next = (e as CustomEvent<number>).detail;
       if (typeof next === "number") setSyncIntervalMin(next);
@@ -820,12 +812,16 @@ export default function DashboardClient() {
   // confetti detection.
   useEffect(() => {
     const t = window.setTimeout(() => {
+      // Prefetch list intentionally excludes /api/metrics/fun-facts:
+      // it depends on the user's chosen region (US/IN/UK/…), and
+      // prefetching without the region would warm the wrong cache key.
+      // CostOverviewView fires the region-aware fetch once region is
+      // hydrated from /api/prefs.
       const urls = [
         "/api/metrics/cost-overview",
         "/api/metrics/wrapped",
         "/api/metrics/comparison",
         "/api/metrics/judgments",
-        "/api/metrics/fun-facts",
         "/api/metrics/sparkline",
       ];
       for (const u of urls) {
@@ -1028,14 +1024,11 @@ export default function DashboardClient() {
     });
 
     // — Settings actions. Theme picks + sync-interval presets + region
-    //   picks all jump to Settings and broadcast their value via the
-    //   same CustomEvent the SettingsView listens to.
-    const writeSetting = (key: string, value: string, event: string) => {
-      try {
-        window.localStorage.setItem(key, value);
-        window.dispatchEvent(new CustomEvent(event, { detail: value }));
-      } catch { /* localStorage blocked → no-op */ }
-    };
+    //   picks all write via setPref which:
+    //     1. updates the in-memory prefs cache,
+    //     2. POSTs /api/prefs (DB write-through),
+    //     3. fires the legacy per-key CustomEvents that other components
+    //        still listen for (dashboard:theme etc.).
     items.push(
       { id: "settings-open", group: "Settings", label: "Open Settings…", hint: "7",
         keywords: ["preferences", "config", "options"],
@@ -1043,19 +1036,19 @@ export default function DashboardClient() {
       { id: "settings-theme-light", group: "Theme", label: "Theme: Light",
         keywords: ["light", "bright", "white", "appearance"],
         onPick: () => {
-          writeSetting("dashboard.theme", "light", "dashboard:theme");
+          setPref("theme", "light");
           document.documentElement.classList.remove("dark");
         } },
       { id: "settings-theme-dark", group: "Theme", label: "Theme: Dark",
         keywords: ["dark", "night", "black", "appearance"],
         onPick: () => {
-          writeSetting("dashboard.theme", "dark", "dashboard:theme");
+          setPref("theme", "dark");
           document.documentElement.classList.add("dark");
         } },
       { id: "settings-theme-system", group: "Theme", label: "Theme: System",
         keywords: ["auto", "system", "os", "appearance"],
         onPick: () => {
-          writeSetting("dashboard.theme", "system", "dashboard:theme");
+          setPref("theme", "system");
           const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           document.documentElement.classList.toggle("dark", dark);
         } },
@@ -1077,10 +1070,7 @@ export default function DashboardClient() {
         group: "Region",
         label: `Region: ${r}`,
         keywords: ["fun facts", "tidbits", "currency", "metaphors", ...(REGION_KEYWORDS[r] || [])],
-        onPick: () => {
-          window.localStorage.setItem("dashboard.region", r);
-          window.dispatchEvent(new CustomEvent("dashboard:region", { detail: r }));
-        },
+        onPick: () => setPref("region", r),
       });
     });
 
@@ -1114,10 +1104,7 @@ export default function DashboardClient() {
       const label = SOURCE_LABEL[s as SourceFilter];
       const toggle = () => {
         const next = hidden ? hiddenSources.filter((x) => x !== s) : [...hiddenSources, s];
-        try {
-          window.localStorage.setItem("dashboard.hiddenSources", JSON.stringify(next));
-          window.dispatchEvent(new CustomEvent("dashboard:hidden-sources", { detail: next }));
-        } catch { /* ignore */ }
+        setPref("hiddenSources", next);
       };
       items.push({
         id: `source-toggle-${s}`,
@@ -1135,7 +1122,7 @@ export default function DashboardClient() {
         group: "Sync interval",
         label: `Auto-sync every ${m} min`,
         keywords: ["interval", "refresh", "background", "import", "cadence"],
-        onPick: () => writeSetting("dashboard.syncIntervalMinutes", String(m), "dashboard:sync-interval"),
+        onPick: () => setPref("syncIntervalMinutes", m),
       });
     });
     items.push({
@@ -1143,7 +1130,7 @@ export default function DashboardClient() {
       group: "Sync interval",
       label: "Auto-sync off",
       keywords: ["disable", "stop", "pause", "off", "manual"],
-      onPick: () => writeSetting("dashboard.syncIntervalMinutes", "0", "dashboard:sync-interval"),
+      onPick: () => setPref("syncIntervalMinutes", 0),
     });
 
     // — Date range presets.

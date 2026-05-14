@@ -313,27 +313,19 @@ export type PaletteItem = {
 // "Smart" doesn't mean LLM-backed — it means the right rules so the
 // obvious top hit actually shows up first.
 
-const RECENCY_KEY = "dashboard.paletteRecency";
+import { readPrefs, setPref } from "./use-prefs";
+
 const RECENCY_LIMIT = 12;
 
 function readRecency(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(RECENCY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
+  return (readPrefs().paletteRecency || []).filter((s) => typeof s === "string");
 }
 
 function pushRecency(id: string) {
-  if (typeof window === "undefined") return;
   const cur = readRecency().filter((x) => x !== id);
   cur.unshift(id);
   cur.length = Math.min(cur.length, RECENCY_LIMIT);
-  try { window.localStorage.setItem(RECENCY_KEY, JSON.stringify(cur)); } catch { /* ignore */ }
+  setPref("paletteRecency", cur);
 }
 
 function fuzzySubsequenceScore(haystack: string, needle: string): number {

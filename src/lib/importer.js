@@ -853,6 +853,17 @@ export function importAll(options = {}) {
       console.error("metric cache revalidate failed:", err?.message || err);
     });
 
+  // Drop fun-fact cache rows so post-sync fetches regenerate against
+  // fresh headline numbers. Cheap delete (one row per region × filter
+  // combo). The Haiku call doesn't re-fire until someone actually opens
+  // the Cost or Wrapped tab; this just clears the staleness gate.
+  try {
+    execSql(`DELETE FROM summaries WHERE kind = 'cost_fun_facts'`);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("fun-facts cache invalidate failed:", err?.message || err);
+  }
+
   return {
     codex: {
       skills: skills.length,

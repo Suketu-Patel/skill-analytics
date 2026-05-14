@@ -2,24 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { Sun, Moon, Monitor, Eye, EyeOff, RefreshCw, Globe2 } from "lucide-react";
+import { readPrefs, setPref, usePrefs } from "./use-prefs";
 
 // ─── settings model ────────────────────────────────────────────────────
 //
-// Two persistent preferences live in localStorage:
-//   dashboard.theme       "light" | "dark" | "system"   (system = follow OS)
-//   dashboard.hiddenTabs  JSON array of tab ids to hide from the nav
+// User preferences (theme, hidden tabs, hidden sources, region, sync
+// interval, anonymize, palette recency) live in SQLite via /api/prefs.
+// Reads consult an in-memory mirror managed by `./use-prefs.ts`; writes
+// go through `setPref(key, value)` which write-through to the DB.
 //
-// The theme is also applied to <html> via the inline script in
-// layout.tsx so first paint matches. Tab visibility is read by
-// dashboard-client and used to filter the nav array.
+// Theme is also mirrored into localStorage purely so the pre-paint
+// inline script in layout.tsx can apply the right class before React
+// hydrates (avoids FOUC). The DB is the source of truth; localStorage
+// is a read-cache.
 
 export type Theme = "light" | "dark" | "system";
-
-const THEME_KEY = "dashboard.theme";
-const HIDDEN_TABS_KEY = "dashboard.hiddenTabs";
-const SYNC_INTERVAL_KEY = "dashboard.syncIntervalMinutes";
-const REGION_KEY = "dashboard.region";
-const HIDDEN_SOURCES_KEY = "dashboard.hiddenSources";
 
 // All known sources. Adding a new source (e.g. "windsurf") later means
 // appending here AND updating the comparison/cost views to read from it
@@ -28,18 +25,9 @@ export const ALL_SOURCES = ["codex", "claude", "cursor"] as const;
 export type SourceId = (typeof ALL_SOURCES)[number];
 
 export function readHiddenSources(): SourceId[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(HIDDEN_SOURCES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s): s is SourceId =>
-      ALL_SOURCES.includes(s as SourceId)
-    );
-  } catch {
-    return [];
-  }
+  return (readPrefs().hiddenSources || []).filter((s): s is SourceId =>
+    ALL_SOURCES.includes(s as SourceId)
+  );
 }
 
 export function visibleSources(): SourceId[] {
@@ -78,9 +66,8 @@ function detectRegionFromTimezone(): Exclude<Region, "auto"> {
 }
 
 export function readRegion(): Region {
-  if (typeof window === "undefined") return "auto";
-  const v = window.localStorage.getItem(REGION_KEY) as Region | null;
-  if (v && (v === "auto" || v in REGION_LABELS)) return v;
+  const v = readPrefs().region as Region;
+  if (v === "auto" || (typeof v === "string" && v in REGION_LABELS)) return v;
   return "auto";
 }
 
@@ -90,6 +77,7 @@ export function resolveRegion(): Exclude<Region, "auto"> {
   if (stored !== "auto") return stored;
   return detectRegionFromTimezone();
 }
+
 // Floor on auto-sync cadence. Below this the importer + cache rebuild
 // dominate the user's runtime experience, and the underlying data
 // rarely changes faster than 10 min anyway.
@@ -97,29 +85,19 @@ export const MIN_SYNC_MINUTES = 10;
 export const DEFAULT_SYNC_MINUTES = 30;
 
 export function readSyncIntervalMinutes(): number {
-  if (typeof window === "undefined") return DEFAULT_SYNC_MINUTES;
-  const raw = window.localStorage.getItem(SYNC_INTERVAL_KEY);
-  if (!raw) return DEFAULT_SYNC_MINUTES;
-  const n = Number(raw);
+  const n = Number(readPrefs().syncIntervalMinutes);
   if (!Number.isFinite(n)) return DEFAULT_SYNC_MINUTES;
-  if (n <= 0) return 0; // 0 = disabled
+  if (n <= 0) return 0;
   return Math.max(MIN_SYNC_MINUTES, Math.round(n));
 }
 
 export function readTheme(): Theme {
-  if (typeof window === "undefined") return "system";
-  const v = window.localStorage.getItem(THEME_KEY);
+  const v = readPrefs().theme;
   return v === "light" || v === "dark" ? v : "system";
 }
 
 export function readHiddenTabs(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(HIDDEN_TABS_KEY);
-    return raw ? (JSON.parse(raw) as string[]).filter((s) => typeof s === "string") : [];
-  } catch {
-    return [];
-  }
+  return (readPrefs().hiddenTabs || []).filter((s) => typeof s === "string");
 }
 
 // Resolves "system" to "light" or "dark" and updates the <html> class.
@@ -131,15 +109,6 @@ function applyTheme(theme: Theme) {
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   const dark = theme === "dark" || (theme === "system" && prefersDark);
   document.documentElement.classList.toggle("dark", dark);
-}
-
-// Dispatch a window event so dashboard-client can re-read its hidden-tab
-// set without prop drilling. Cheap, decoupled, and doesn't require a
-// global store.
-function broadcastHiddenTabs(next: string[]) {
-  window.dispatchEvent(
-    new CustomEvent("dashboard:hidden-tabs", { detail: next })
-  );
 }
 
 // ─── view ──────────────────────────────────────────────────────────────
@@ -169,9 +138,14 @@ export default function SettingsView() {
   // every chart, source-filter pill, and the comparison view's columns.
   const [hiddenSources, setHiddenSources] = useState<SourceId[]>([]);
 
-  // Hydrate from localStorage once we're on the client. SSR returns the
-  // defaults so the markup is identical before/after hydration.
+  // usePrefs ensures the in-memory cache is hydrated from /api/prefs;
+  // `prefsLoaded` flips true on first successful load (or default fallback).
+  const { loaded: prefsLoaded } = usePrefs();
+  // Hydrate local mirror state once prefs are loaded — and re-sync on
+  // every subsequent change so cross-component updates (e.g. ⌘K
+  // toggling theme) keep this panel in sync.
   useEffect(() => {
+    if (!prefsLoaded) return;
     setTheme(readTheme());
     setHidden(readHiddenTabs());
     const cur = readSyncIntervalMinutes();
@@ -180,9 +154,11 @@ export default function SettingsView() {
     setRegion(readRegion());
     setResolvedRegion(resolveRegion());
     setHiddenSources(readHiddenSources());
+  }, [prefsLoaded]);
 
+  useEffect(() => {
     // Live-follow OS theme flips while "system" is selected. The
-    // listener is cleaned up on theme change or unmount.
+    // listener is cleaned up on unmount.
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => {
       if (readTheme() === "system") applyTheme("system");
@@ -191,50 +167,40 @@ export default function SettingsView() {
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
 
+  // All writers below go through setPref → the DB. setPref also fires
+  // the legacy per-key CustomEvents (dashboard:hidden-tabs etc.) so any
+  // listener that hasn't migrated to the unified dashboard:prefs event
+  // still works.
+
   function pickTheme(next: Theme) {
     setTheme(next);
-    window.localStorage.setItem(THEME_KEY, next);
+    setPref("theme", next);
     applyTheme(next);
   }
 
   function toggleTab(id: string) {
-    // Compute the next set OUTSIDE the state updater. React updaters
-    // must be pure — dispatching a CustomEvent (which synchronously
-    // triggers DashboardClient's setHiddenTabs) from inside the
-    // updater is what produced the "Cannot update a component while
-    // rendering a different component" warning.
     const next = hidden.includes(id) ? hidden.filter((t) => t !== id) : [...hidden, id];
     setHidden(next);
-    window.localStorage.setItem(HIDDEN_TABS_KEY, JSON.stringify(next));
-    broadcastHiddenTabs(next);
+    setPref("hiddenTabs", next);
   }
 
   function resetTabs() {
     setHidden([]);
-    window.localStorage.setItem(HIDDEN_TABS_KEY, "[]");
-    broadcastHiddenTabs([]);
+    setPref("hiddenTabs", []);
   }
 
   function toggleSource(id: SourceId) {
-    // Same pattern as toggleTab — side effects out of the updater.
     const next = hiddenSources.includes(id)
       ? hiddenSources.filter((s) => s !== id)
       : [...hiddenSources, id];
     setHiddenSources(next);
-    window.localStorage.setItem(HIDDEN_SOURCES_KEY, JSON.stringify(next));
-    // Every consumer that lists sources (FilterBar pills, Comparison
-    // columns, ⌘K source picks) listens for this event and re-reads
-    // the visible set. No reload required.
-    window.dispatchEvent(new CustomEvent("dashboard:hidden-sources", { detail: next }));
+    setPref("hiddenSources", next);
   }
 
   function pickRegion(next: Region) {
     setRegion(next);
-    window.localStorage.setItem(REGION_KEY, next);
     setResolvedRegion(next === "auto" ? detectRegionFromTimezone() : next);
-    // Other components (CostOverviewView's fun-facts loader) listen
-    // and refetch so the new metaphor bank applies without a reload.
-    window.dispatchEvent(new CustomEvent("dashboard:region", { detail: next }));
+    setPref("region", next);
   }
 
   // Commit the typed-in interval. Empty string disables auto-sync;
@@ -255,10 +221,7 @@ export default function SettingsView() {
     }
     setSyncMin(next);
     setSyncDraft(next === 0 ? "" : String(next));
-    window.localStorage.setItem(SYNC_INTERVAL_KEY, String(next));
-    window.dispatchEvent(
-      new CustomEvent("dashboard:sync-interval", { detail: next })
-    );
+    setPref("syncIntervalMinutes", next);
   }
 
   return (

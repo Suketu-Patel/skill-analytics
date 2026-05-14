@@ -217,6 +217,21 @@ CREATE INDEX IF NOT EXISTS idx_summaries_kind ON summaries(kind);
 CREATE INDEX IF NOT EXISTS idx_summaries_time ON summaries(generated_at);
 `);
 
+  // User preferences. Previously every pref lived in browser localStorage
+  // (hiddenTabs, hiddenSources, syncIntervalMinutes, region, anonymize,
+  // paletteRecency, theme). That meant clearing site data wiped them and
+  // there was no single place to back up "my dashboard configuration".
+  // We persist them here under a tiny key/value schema. The client still
+  // mirrors theme into localStorage purely for FOUC prevention — the
+  // pre-paint <html className="dark"> needs a synchronous read before
+  // React hydrates, and SQLite is reachable only via the API.
+  execSql(`
+CREATE TABLE IF NOT EXISTS user_prefs (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,            -- JSON-encoded; client decodes
+  updated_at TEXT NOT NULL
+);`);
+
   // Layer 3: LLM-as-judge verdicts. One row per (skill_event_key, judge).
   // Judges: "haiku" (Claude Code's Haiku model) and "codex" (codex exec).
   // Codex acts as a tiebreaker on cases where the Haiku judge and the

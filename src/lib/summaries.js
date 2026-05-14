@@ -222,6 +222,27 @@ function writeCached(hash, model, payload) {
 // ─── main entry ──────────────────────────────────────────────────────────
 
 /**
+ * Coarse "fast" cache key — built from (region, filter query-string).
+ * Lets the route serve cached facts WITHOUT computing the cost-overview
+ * headline first. The cache is invalidated on every sync by the
+ * importer (kind = cost_fun_facts), so freshness is bounded by sync
+ * cadence, not by headline-number changes.
+ *
+ * The original headline-content hash is kept as a secondary write so
+ * an identical-headline-different-filter call still hits cache after
+ * an invalidation that happens to not have re-warmed the coarse key.
+ */
+export function fastFunFactsKey({ region, filterQS = "" }) {
+  return sha256(`${KIND}:fast:${region || "US"}:${filterQS}`);
+}
+
+/** Public fast-path read used by /api/metrics/fun-facts. Returns null
+ *  when no cached row exists; never calls Haiku. */
+export function readFastFunFacts({ region, filterQS = "" }) {
+  return readCached(fastFunFactsKey({ region, filterQS }));
+}
+
+/**
  * Get fun-fact summaries for the given headline. Returns immediately from
  * cache if the same numbers were summarized before; otherwise calls Haiku.
  *
@@ -229,15 +250,20 @@ function writeCached(hash, model, payload) {
  *   { facts: string[], generated_at, model, cached: boolean }
  *   { error: "...", facts: [] } on failure
  */
-export async function getCostFunFacts(headline, { force = false, region = "US" } = {}) {
-  // Region rides into the prompt and therefore into the hash — different
-  // regions get different cached responses so an Indian user never sees
-  // the cached "Costco chicken" line generated for an American user.
+export async function getCostFunFacts(headline, { force = false, region = "US", filterQS = "" } = {}) {
+  // Two cache rows are written per Haiku call:
+  //   1. A coarse "fast" row keyed by (region, filterQS) — the one the
+  //      route looks up first, no headline needed.
+  //   2. The original headline-content hash row, kept for back-compat
+  //      and as a per-headline dedupe.
+  // Region rides into the prompt — different regions get different
+  // cached responses so an Indian user never sees Costco-chicken lines.
   const prompt = buildPrompt(headline, region);
   const hash = sha256(`${KIND}:${region}:${prompt}`);
+  const fastHash = fastFunFactsKey({ region, filterQS });
 
   if (!force) {
-    const cached = readCached(hash);
+    const cached = readCached(fastHash) || readCached(hash);
     if (cached && Array.isArray(cached.facts) && cached.facts.length) {
       return cached;
     }
@@ -277,7 +303,9 @@ export async function getCostFunFacts(headline, { force = false, region = "US" }
     .slice(0, 8);
 
   const payload = { facts };
+  // Write both rows so subsequent calls can fast-path on either key.
   writeCached(hash, HAIKU_MODEL, payload);
+  writeCached(fastHash, HAIKU_MODEL, payload);
   return {
     ...payload,
     generated_at: new Date().toISOString(),
