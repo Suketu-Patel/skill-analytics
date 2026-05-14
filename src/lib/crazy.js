@@ -10,10 +10,12 @@ import { queryRows, sqlString } from "./sqlite.js";
 // — Shared helpers ────────────────────────────────────────────────────
 
 // Words/phrases the user types AFTER an assistant turn when the
-// previous answer didn't land. Conservative on purpose, we'd rather
-// undercount than over-flag every "thanks, but" as frustration.
+// previous answer didn't land. Two classes: polite corrections (no,
+// wrong, actually) and explicit frustration (fuck, wtf, ugh). We
+// match both, but the fingerprint surfaces the top-by-count so
+// the spicy ones show up if they're really how you talk.
 const CORRECTION_RE =
-  /\b(no|nope|wrong|actually|instead|that'?s not|try again|undo|revert|broken|fix this|redo|start over|didn'?t (?:work|finish|complete)|stop|don'?t|why (?:did|are) you)\b/i;
+  /\b(no|nope|wrong|actually|instead|that'?s not|try again|undo|revert|broken|fix this|redo|start over|didn'?t (?:work|finish|complete)|stop|don'?t|why (?:did|are) you|fuck|fucks?|fucking|shit|damn|hell|wtf|dammit|bullshit|bs|crap|ugh|jesus|christ|wtaf|smh|wth|frustrat\w*|annoying|stupid|come on|seriously|bruh)\b/i;
 
 // Phrases the model says when it's stalling / over-apologizing /
 // performing competence rather than demonstrating it. The literature
@@ -373,64 +375,6 @@ export function pepTalkIndex() {
       .slice(0, 10)
       .map(([phrase, count]) => ({ phrase, count })),
   };
-}
-
-// — #19: Session replay (timeline) ────────────────────────────────────
-//
-// Returns a list of sessions for the picker, plus a way to fetch one
-// session's full event stream ordered by timestamp. The UI plays it
-// back. We cap message bodies at ~600 chars so the response is fast
-// and the UI doesn't choke on a single 80k-token assistant turn.
-export function listReplayableSessions(limit = 50) {
-  return queryRows(`
-    SELECT t.session_id,
-           MIN(t.cwd) AS cwd,
-           MIN(t.started_at) AS started_at,
-           MAX(t.completed_at) AS ended_at,
-           COUNT(*) AS turns,
-           SUM(COALESCE(tu.input_tokens,0) + COALESCE(tu.output_tokens,0)
-               + COALESCE(tu.reasoning_output_tokens,0)) AS tokens,
-           MIN(t.source) AS source
-    FROM turns t
-    LEFT JOIN token_usage tu ON tu.turn_id = t.turn_id
-    WHERE t.session_id IS NOT NULL
-    GROUP BY t.session_id
-    HAVING turns >= 3
-    ORDER BY started_at DESC
-    LIMIT ${limit}
-  `);
-}
-
-export function sessionReplay(sessionId) {
-  if (!sessionId) return { events: [] };
-  // We pull from raw_events filtered to the source_paths in this session.
-  // turns.source_path is per-turn, so we look up the distinct paths first.
-  const paths = queryRows(`
-    SELECT DISTINCT source_path FROM turns WHERE session_id = ${sqlString(sessionId)}
-  `).map((r) => r.source_path).filter(Boolean);
-  if (paths.length === 0) return { events: [] };
-  const pathList = paths.map((p) => sqlString(p)).join(",");
-  const rows = queryRows(`
-    SELECT timestamp, event_type, payload_type, raw_json
-    FROM raw_events
-    WHERE source_path IN (${pathList})
-      AND payload_type IN ('user_message', 'user', 'assistant', 'function_call', 'tool_use')
-    ORDER BY timestamp
-    LIMIT 500
-  `);
-  const events = rows.map((r) => {
-    let kind = "other";
-    if (r.payload_type === "assistant") kind = "assistant";
-    else if (r.payload_type === "user_message" || r.payload_type === "user" || r.event_type === "user") kind = "user";
-    else if (r.payload_type === "function_call" || r.payload_type === "tool_use") kind = "tool";
-    const text = extractMessageText({ raw_json: r.raw_json });
-    return {
-      timestamp: r.timestamp,
-      kind,
-      text: text ? text.slice(0, 600) : "",
-    };
-  });
-  return { events };
 }
 
 // — #21: AI fingerprint ───────────────────────────────────────────────

@@ -6,7 +6,6 @@ import {
   phantomEdits,
   toolTransitions,
   pepTalkIndex,
-  listReplayableSessions,
   aiFingerprint,
 } from "@/lib/crazy";
 
@@ -26,7 +25,6 @@ export async function GET() {
       phantom_edits: phantomEdits(),
       tool_transitions: toolTransitions(),
       pep_talk: pepTalkIndex(),
-      sessions: listReplayableSessions(),
       fingerprint: aiFingerprint(),
     });
   } catch (e) {
