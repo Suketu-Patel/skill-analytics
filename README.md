@@ -17,6 +17,20 @@ http://127.0.0.1:4210/
 
 ---
 
+## Install prompt (paste into any agent)
+
+```
+Install skill-analytics on this machine by following the Install steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report the URL.
+```
+
+## Update prompt (paste into any agent)
+
+```
+Update my skill-analytics install by following the Update steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report what's new.
+```
+
+---
+
 ## Quick start
 
 ```bash
@@ -83,20 +97,6 @@ These need additional CLIs on PATH but the dashboard works without them:
 - SQLite DB at `data/skill-analytics.sqlite` (gitignored; never leaves your machine).
 - Importer reads only your local `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl` plus `~/.codex/log/codex-tui.log` and any `.codex/agents/*.toml`. Nothing is uploaded anywhere.
 - Re-run `npm run import` anytime to refresh. Idempotent, re-imports are safe.
-
----
-
-## Install prompt (paste into any agent)
-
-```
-Install skill-analytics on this machine by following the Install steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report the URL.
-```
-
-## Update prompt (paste into any agent)
-
-```
-Update my skill-analytics install by following the Update steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report what's new.
-```
 
 ---
 
