@@ -57,6 +57,47 @@ export function execSql(sql) {
   db().exec(sql);
 }
 
+// — Blue-green outer transaction support ────────────────────────────────
+//
+// SQLite WAL mode already guarantees readers see a consistent snapshot
+// while a write transaction is open. We exploit that to make the import
+// look atomic: wrap the whole import in BEGIN IMMEDIATE...COMMIT so that
+// readers continue to see the OLD data until the very last second, then
+// snap to the NEW data on commit. No file swap, no shadow tables, no
+// stale loading flashes when the user reloads mid-sync.
+//
+// SqlBatch.flush checks `inOuterTransaction()` and skips its own
+// BEGIN/COMMIT when an outer transaction is active (nested BEGIN errors
+// in sqlite). Callers that want atomic-import semantics call
+// withOuterTransaction(fn); everyone else is unaffected.
+let _txDepth = 0;
+export function inOuterTransaction() {
+  return _txDepth > 0;
+}
+export function withOuterTransaction(fn) {
+  if (_txDepth > 0) {
+    // Already inside one. Just run the function; the outermost caller
+    // owns commit/rollback.
+    return fn();
+  }
+  execSql("BEGIN IMMEDIATE;");
+  _txDepth++;
+  try {
+    const result = fn();
+    execSql("COMMIT;");
+    return result;
+  } catch (err) {
+    try {
+      execSql("ROLLBACK;");
+    } catch {
+      // already rolled back or never started; either way nothing to do
+    }
+    throw err;
+  } finally {
+    _txDepth--;
+  }
+}
+
 export function queryRows(sql) {
   // better-sqlite3 returns native JS arrays of objects — no JSON parse, no
   // process spawn. Per-query cost drops from ~80ms (CLI) to microseconds.
@@ -276,7 +317,14 @@ export class SqlBatch {
 
   flush() {
     if (!this.statements.length) return;
-    execSql(`BEGIN;\n${this.statements.join("\n")}\nCOMMIT;`);
+    // When an outer transaction is active (blue-green import wrap), skip
+    // our own BEGIN/COMMIT, sqlite errors on nested BEGIN. The outer
+    // caller is responsible for commit/rollback.
+    if (inOuterTransaction()) {
+      execSql(this.statements.join("\n"));
+    } else {
+      execSql(`BEGIN;\n${this.statements.join("\n")}\nCOMMIT;`);
+    }
     this.statements = [];
   }
 }

@@ -8,7 +8,8 @@ import {
   sha256,
   sqlBool,
   sqlNumber,
-  sqlString
+  sqlString,
+  withOuterTransaction,
 } from "./sqlite.js";
 import { codexHome, explicitEventLogPath, projectRoot } from "./paths.js";
 import { importClaude } from "./claude-importer.js";
@@ -761,12 +762,17 @@ function importExplicitEvents(batch, file, skills) {
 
 export function importAll(options = {}) {
   initDb();
-  resetImportedData();
-  const batch = new SqlBatch();
-  const skills = loadSkillRegistry();
 
-  for (const statement of upsertSkillStatements(skills)) batch.add(statement);
-
+  // Blue-green wrap. WAL mode lets readers see the OLD data for the full
+  // duration of this transaction, then snap to the NEW data atomically
+  // on COMMIT. resetImportedData() used to leave the DB visibly empty
+  // for the 30+ seconds of a sync; readers reloading mid-sync would see
+  // "Loading..." and zero counts. Now they see stable old numbers until
+  // the very last second.
+  //
+  // VACUUM and the post-import cache rebuilds run OUTSIDE the txn
+  // (VACUUM can't run inside one, and the caches are cheap enough to
+  // catch up after the swap).
   const home = codexHome();
   const sessionsRoot = options.sessionsRoot || path.join(home, "sessions");
   const tuiLog = options.tuiLog || path.join(home, "log", "codex-tui.log");
@@ -774,32 +780,44 @@ export function importAll(options = {}) {
   const sessionFiles = walkFiles(sessionsRoot, (file) => file.endsWith(".jsonl"));
 
   let sessionLineCount = 0;
-  for (const file of sessionFiles) {
-    sessionLineCount += importSessionFile(batch, file, skills).lines;
-  }
-  const tuiLines = importTuiLog(batch, tuiLog, skills).lines;
-  const explicitLines = importExplicitEvents(batch, explicitLog, skills).lines;
-
-  batch.flush();
-
-  // Claude data lives in ~/.claude/projects/**/*.jsonl. It uses its own batch
-  // (so failures in either source don't block the other).
+  let tuiLines = 0;
+  let explicitLines = 0;
   let claudeResult = null;
-  try {
-    claudeResult = importClaude();
-  } catch (err) {
-    claudeResult = { error: String(err?.message || err) };
-  }
-
-  // Cursor data lives in ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb.
-  // Same isolation pattern as Claude — a Cursor failure shouldn't block the rest.
   let cursorResult = null;
-  try {
-    cursorResult = importCursor();
-  } catch (err) {
-    cursorResult = { error: String(err?.message || err) };
-  }
+  let skills = [];
 
+  withOuterTransaction(() => {
+    resetImportedData();
+    const batch = new SqlBatch();
+    skills = loadSkillRegistry();
+
+    for (const statement of upsertSkillStatements(skills)) batch.add(statement);
+
+    for (const file of sessionFiles) {
+      sessionLineCount += importSessionFile(batch, file, skills).lines;
+    }
+    tuiLines = importTuiLog(batch, tuiLog, skills).lines;
+    explicitLines = importExplicitEvents(batch, explicitLog, skills).lines;
+
+    batch.flush();
+
+    // Claude + Cursor importers run inside the same outer txn so the
+    // whole sync is one atomic swap. Per-source try/catch so one
+    // source's failure doesn't abort the whole transaction; we still
+    // commit whatever did succeed (consistent with the old behavior).
+    try {
+      claudeResult = importClaude();
+    } catch (err) {
+      claudeResult = { error: String(err?.message || err) };
+    }
+    try {
+      cursorResult = importCursor();
+    } catch (err) {
+      cursorResult = { error: String(err?.message || err) };
+    }
+  });
+
+  // VACUUM must run outside any transaction.
   execSql("VACUUM;");
 
   // Cache the Wrapped snapshot so its tab loads instantly after sync
