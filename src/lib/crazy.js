@@ -5,7 +5,7 @@
 // they all run in <200ms on a ~200K-event corpus.
 import fs from "node:fs";
 import path from "node:path";
-import { queryRows, sqlString } from "./sqlite.js";
+import { SqlBatch, queryRows, sha256, sqlString } from "./sqlite.js";
 
 // — Shared helpers ────────────────────────────────────────────────────
 
@@ -26,6 +26,152 @@ const PEPTALK_RE =
 
 function parseRaw(json) {
   try { return JSON.parse(json); } catch { return null; }
+}
+
+// ─── Learned noise cache ──────────────────────────────────────────────
+//
+// We persist a per-user blacklist of agent-brief phrases in `summaries`
+// (kind='learned_noise_phrases'). Refreshed on every sync; consumed by
+// aiFingerprint at phrase-mining time. The dashboard ships with zero
+// hardcoded project-specific terms; everything domain-specific is
+// learned from the user's own corpus.
+const LEARNED_NOISE_KIND = "learned_noise_phrases";
+const LEARNED_NOISE_KEY = sha256(`${LEARNED_NOISE_KIND}:v1`);
+
+export function loadLearnedNoise() {
+  try {
+    const rows = queryRows(
+      `SELECT payload FROM summaries WHERE content_hash = ${sqlString(LEARNED_NOISE_KEY)} LIMIT 1`
+    );
+    if (!rows.length) return [];
+    const parsed = JSON.parse(rows[0].payload);
+    return Array.isArray(parsed.phrases) ? parsed.phrases.map((p) => p.phrase) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Compute and persist the user-specific noise-phrase blacklist.
+ *
+ * For each bigram/trigram in the user's messages, compute its frequency
+ * in LONG messages (>500 chars, agent briefs / instructions) vs SHORT
+ * messages (<=500 chars, conversational). A phrase that's dramatically
+ * more common in long messages is "instruction language" for this user
+ * and should be filtered out of the favorite-phrases list. A phrase
+ * common in BOTH or only in short messages is real voice — keep it.
+ *
+ * Stable across users: the algorithm has no hardcoded domain terms.
+ * Whatever a user's projects involve, the long-message corpus reveals
+ * their boilerplate.
+ */
+export function learnNoisePhrases({ topN = 300, minLongCount = 3, minRatio = 3 } = {}) {
+  const userMsgs = queryRows(`
+    SELECT raw_json FROM raw_events
+    WHERE payload_type IN ('user_message', 'user') OR event_type = 'user'
+    LIMIT 20000
+  `);
+  // Same skip rules aiFingerprint uses, kept inline so the learner is
+  // self-contained and doesn't depend on the calling order.
+  const META_RE = /The following is the Codex agent history|>>> TRANSCRIPT START|^\s*\[Request interrupted by user|^\s*<system-reminder>|^\s*<task-notification>|^\s*\[Image:?\s*source:|^\s*\[Image\s*\d*\s*:/i;
+  const longCounts = new Map();
+  const shortCounts = new Map();
+  let longMessages = 0;
+  let shortMessages = 0;
+  for (const m of userMsgs) {
+    const raw = extractMessageText(m, { userOnly: true });
+    if (!raw || META_RE.test(raw)) continue;
+    // Strip Codex IDE context: real ask after "## My request" if present.
+    let text = raw;
+    const marker = text.indexOf("## My request");
+    if (marker >= 0) text = text.slice(marker).replace(/^##\s+My request[^\n]*\n+/, "");
+    if (!text) continue;
+
+    const isLong = text.length > 500;
+    if (isLong) longMessages++;
+    else shortMessages++;
+
+    const words = text
+      .toLowerCase()
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`]*`/g, " ")
+      .replace(/https?:\/\/\S+/g, " ")
+      .replace(/\S+\/\S+/g, " ")
+      .replace(/&[a-z]+;/g, " ")
+      .replace(/[^a-z0-9\s']/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 2 && w.length <= 20)
+      .filter((w) => {
+        if (/^\d+$/.test(w)) return false;
+        if (w.length >= 6 && /\d/.test(w) && /[a-z]/.test(w)) return false;
+        return true;
+      });
+    const target = isLong ? longCounts : shortCounts;
+    for (let i = 0; i + 1 < words.length; i++) {
+      const key2 = `${words[i]} ${words[i + 1]}`;
+      target.set(key2, (target.get(key2) || 0) + 1);
+      if (i + 2 < words.length) {
+        const key3 = `${words[i]} ${words[i + 1]} ${words[i + 2]}`;
+        target.set(key3, (target.get(key3) || 0) + 1);
+      }
+    }
+  }
+  // Need both pools to compute a ratio. If user only has long messages
+  // (rare; maybe they only write agent briefs), bail with empty list.
+  if (longMessages === 0 || shortMessages === 0) {
+    return persistLearnedNoise([], { longMessages, shortMessages });
+  }
+  // Score: per-message frequency in long vs short. We want phrases
+  // that occur in many long messages but are absent or rare in short.
+  // Add Laplace smoothing so phrases unseen in short don't divide by 0.
+  const scored = [];
+  for (const [phrase, longC] of longCounts) {
+    if (longC < minLongCount) continue;
+    const shortC = shortCounts.get(phrase) || 0;
+    const longRate = longC / longMessages;
+    const shortRate = (shortC + 1) / (shortMessages + 1); // smoothed
+    const ratio = longRate / shortRate;
+    if (ratio < minRatio) continue;
+    scored.push({ phrase, longC, shortC, ratio: Number(ratio.toFixed(2)) });
+  }
+  // Union of two sorts:
+  //  - by ratio (catches rare-but-pure instruction phrases like "spec
+  //    doc" that the user never says conversationally)
+  //  - by raw long-message count (catches high-volume phrases like
+  //    "the user" that ALSO show up in short messages occasionally,
+  //    so their ratio is "only" ~15 but they're still 90% noise).
+  // Without the volume cut, very common instruction words get pushed
+  // out of the top-N by long-tail rare phrases.
+  const byRatio = [...scored].sort((a, b) => b.ratio - a.ratio || b.longC - a.longC);
+  const byVolume = [...scored].sort((a, b) => b.longC - a.longC || b.ratio - a.ratio);
+  const seen = new Set();
+  const learned = [];
+  const halfN = Math.ceil(topN / 2);
+  for (const p of byRatio.slice(0, halfN)) {
+    if (!seen.has(p.phrase)) { seen.add(p.phrase); learned.push(p); }
+  }
+  for (const p of byVolume.slice(0, halfN)) {
+    if (!seen.has(p.phrase)) { seen.add(p.phrase); learned.push(p); }
+  }
+  return persistLearnedNoise(learned, { longMessages, shortMessages });
+}
+
+function persistLearnedNoise(phrases, meta) {
+  const payload = {
+    generated_at: new Date().toISOString(),
+    long_messages: meta.longMessages || 0,
+    short_messages: meta.shortMessages || 0,
+    phrases,
+  };
+  const batch = new SqlBatch();
+  batch.add(
+    `INSERT OR REPLACE INTO summaries (content_hash, kind, model, generated_at, payload)
+     VALUES (${sqlString(LEARNED_NOISE_KEY)}, ${sqlString(LEARNED_NOISE_KIND)}, NULL,
+             ${sqlString(payload.generated_at)},
+             ${sqlString(JSON.stringify(payload))})`
+  );
+  batch.flush();
+  return payload;
 }
 
 // Pulls the textual body out of a raw_events row, regardless of which
@@ -439,28 +585,26 @@ export function aiFingerprint() {
     "yours","i","im","we","us","our","ours","he","him","his","she","her","hers","they","them",
     "their","theirs","com","de","la","el","et","un","une",
   ]);
-  // Common short-phrase noise that drowns out the actual signal.
-  // Two classes: connective tissue ("you can", "it is") and agent-brief
-  // boilerplate ("the user", "the file") that the user types when
-  // writing instructions FOR an LLM, not when talking conversationally.
+  // Universal English connective tissue. Same for every speaker of
+  // English, not user-specific. Pronoun + auxiliary + article filler.
+  // This stays hardcoded.
   const PHRASE_BLACKLIST = new Set([
     "you can","i can","you are","i am","i was","it is","there is","there are",
     "this is","that is","you should","i should","you have","i have","i will","you will",
     "i think","you know","let me","let s","i d","you d","i ll","you ll",
-    // Third-person agent-brief framing
-    "the user","user 's","the file","the same","the new","the next","the current",
-    "the way","the previous","the existing","the right","the wrong","the model",
-    "the test","the tests","the script","the data","the page","the code","the api",
-    "the agent","the assistant","the change","the changes","the fix","the issue",
-    "the bug","the feature","the request","the response","the task","the step",
-    "you should","do not","make sure","based on","such that","in order","as well",
-    "read only","run the","use the","do the","get the","add the","set the","fix the",
-    "this file","this code","this is","this should","this means","that we","that you",
-    "we need","we should","we want","we have","i want","i need","i would","i d like",
     "for the","with the","without the","of the","to the","from the","on the","at the",
     "in the","by the","into the","via the","across the","through the","over the","under the",
-    "as the","like the","than the","then the",
+    "as the","like the","than the","then the","we have","we need","we should","we want",
   ]);
+
+  // User-specific learned noise. These phrases get auto-discovered by
+  // comparing long-message frequency (agent briefs) to short-message
+  // frequency (conversational). What's "instruction language" for one
+  // user (e.g. "the migration agent" for a refactor-heavy user) is
+  // totally different for another (e.g. "the react component" for a
+  // frontend user). Reloaded per-sync from the summaries cache.
+  const learnedNoise = loadLearnedNoise();
+  for (const phrase of learnedNoise) PHRASE_BLACKLIST.add(phrase);
   const bigramCounts = new Map();
   const trigramCounts = new Map();
   const frustrationCounts = new Map();

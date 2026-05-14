@@ -19,6 +19,7 @@ import {
   toolTransitions,
   pepTalkIndex,
   aiFingerprint,
+  learnNoisePhrases,
 } from "./crazy.js";
 
 const KIND = "crazy_snapshot";
@@ -36,6 +37,21 @@ function nowIso() {
  */
 export function precomputeCrazySnapshot() {
   initDb();
+  // Refresh the user-specific noise blacklist BEFORE running fingerprint.
+  // The learner partitions the user's messages by length, finds bigrams
+  // that occur disproportionately in long agent-brief messages vs short
+  // conversational ones, and persists the top-N. aiFingerprint reads
+  // that list at phrase-mining time. This makes the dashboard work for
+  // any user without hardcoded domain-specific terms.
+  try {
+    learnNoisePhrases();
+  } catch (err) {
+    // Non-fatal: the static blacklist (English connective tissue)
+    // still applies. We just don't get the user-specific filter on
+    // first sync if something goes sideways.
+    // eslint-disable-next-line no-console
+    console.error("learnNoisePhrases failed:", err?.message || err);
+  }
   const payload = {
     generated_at: nowIso(),
     frustration: frustrationByHour(),
