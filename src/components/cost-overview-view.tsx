@@ -19,6 +19,7 @@ import {
   YAxis,
 } from "recharts";
 import { useChartDateBrush } from "./use-chart-date-brush";
+import { fetchJson } from "./fetch-json";
 import { CostOverviewSkeleton, PanelAnchor } from "./ux-bits";
 
 // ─── data shapes ─────────────────────────────────────────────────────────
@@ -304,8 +305,7 @@ export default function CostOverviewView({
     // screen so the user sees a smooth swap instead of a flash.
     if (!data) setLoading(true);
     const url = `/api/metrics/cost-overview${filterQS ? `?${filterQS}` : ""}`;
-    fetch(url)
-      .then((r) => r.json())
+    fetchJson<Payload & { ok: boolean; error?: string }>(url)
       .then((j) => {
         if (cancelled) return;
         if (j.ok) {
@@ -316,7 +316,9 @@ export default function CostOverviewView({
         }
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e));
+        // fetchJson throws with the actual server message ("500: ...")
+        // instead of a cryptic JSON parse error.
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -371,10 +373,9 @@ export default function CostOverviewView({
     qs.set("region", region);
     if (force) qs.set("force", "1");
     const url = `/api/metrics/fun-facts?${qs.toString()}`;
-    fetch(url)
-      .then((r) => r.json())
+    fetchJson<FunFacts>(url)
       .then((j) => setFunFacts(j))
-      .catch((e) => setFunFacts({ ok: false, error: String(e), facts: [] }))
+      .catch((e) => setFunFacts({ ok: false, error: e instanceof Error ? e.message : String(e), facts: [] }))
       .finally(() => setFunLoading(false));
   };
   useEffect(() => {

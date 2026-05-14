@@ -24,6 +24,7 @@ import {
   Flame,
   Hammer,
   Moon,
+  Share2,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -1548,6 +1549,7 @@ export default function DashboardClient() {
               </button>
             );
           })()}
+          <ShareButton />
           <button
             onClick={runImport}
             disabled={importing}
@@ -1644,7 +1646,7 @@ export default function DashboardClient() {
           <button
             type="button"
             onClick={() => setSourceFilter("all")}
-            title="Show all sources"
+            title="Show all sources (or press Esc)"
             className={`shrink-0 rounded-md border bg-white px-2.5 py-1 text-xs font-medium hover:text-white ${
               sourceFilter === "claude"
                 ? "border-claude text-claude hover:bg-claude"
@@ -1653,7 +1655,7 @@ export default function DashboardClient() {
                   : "border-codex text-codex hover:bg-codex"
             }`}
           >
-            ✕ Clear
+            ✕ Clear (Esc)
           </button>
         </div>
       )}
@@ -2370,6 +2372,99 @@ function EvidenceBlock({ label, value, tone = "neutral" }: { label: string; valu
   );
 }
 
+// Header share button: copies the install or update prompt from the
+// README to the clipboard so the user can paste it into Claude/Cursor/
+// Codex on another machine. Single button → small popover with two
+// copy buttons. Confirmation flashes inline.
+const INSTALL_PROMPT =
+  "Install skill-analytics on this machine by following the Install steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report the URL.";
+const UPDATE_PROMPT =
+  "Update my skill-analytics install by following the Update steps in https://github.com/Suketu-Patel/skill-analytics/blob/main/README.md, then report what's new.";
+
+function ShareButton() {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<"" | "install" | "update">("");
+
+  async function copy(which: "install" | "update") {
+    const text = which === "install" ? INSTALL_PROMPT : UPDATE_PROMPT;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      window.setTimeout(() => setCopied(""), 1500);
+    } catch {
+      // navigator.clipboard requires secure context. Fall back to a
+      // temporary textarea + execCommand for http://127.0.0.1 dev usage
+      // where the browser sometimes treats localhost as not-secure.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+      setCopied(which);
+      window.setTimeout(() => setCopied(""), 1500);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Copy a prompt that another agent can paste to install or update this dashboard"
+        data-palette-label="Share: copy install/update prompt"
+        data-palette-group="Actions"
+        data-palette-keywords="share, copy, install, prompt, agent, paste, onboard"
+        className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-white px-3 text-sm font-medium text-ink hover:border-teal"
+      >
+        <Share2 size={16} />
+        <span className="hidden sm:inline">Share</span>
+      </button>
+      {open && (
+        <>
+          {/* click-away catcher; closes the popover without swallowing
+              other interactions inside it */}
+          <button
+            type="button"
+            aria-label="Dismiss share menu"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default bg-transparent"
+          />
+          <div className="absolute right-0 top-12 z-50 w-80 rounded-md border border-line bg-white p-3 shadow-lg dark:bg-slate-900">
+            <p className="mb-2 text-xs text-slate-500">
+              Paste into Claude Code, Cursor, or Codex on another machine.
+            </p>
+            <button
+              type="button"
+              onClick={() => copy("install")}
+              className="mb-2 w-full rounded-md border border-line px-3 py-2 text-left text-xs hover:border-teal"
+            >
+              <div className="font-semibold text-ink">
+                {copied === "install" ? "Copied ✓" : "Copy install prompt"}
+              </div>
+              <div className="mt-0.5 line-clamp-2 text-[10px] text-slate-500">
+                {INSTALL_PROMPT}
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => copy("update")}
+              className="w-full rounded-md border border-line px-3 py-2 text-left text-xs hover:border-teal"
+            >
+              <div className="font-semibold text-ink">
+                {copied === "update" ? "Copied ✓" : "Copy update prompt"}
+              </div>
+              <div className="mt-0.5 line-clamp-2 text-[10px] text-slate-500">
+                {UPDATE_PROMPT}
+              </div>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 type AuthoredSkillRow = {
   name: string;
   kind: string;
@@ -2507,9 +2602,10 @@ function EvidenceModal({ evidence, onClose }: { evidence: Record<string, unknown
             </button>
             <button
               onClick={onClose}
+              title="Close (Esc)"
               className="rounded-md border border-line px-3 py-1 text-sm hover:border-teal"
             >
-              Close
+              Close (Esc)
             </button>
           </div>
         </div>
@@ -2952,7 +3048,8 @@ function SkillDetailModal({
           <button
             onClick={onClose}
             className="ml-3 inline-flex h-9 w-9 items-center justify-center rounded-md border border-line hover:border-teal"
-            aria-label="Close"
+            aria-label="Close (Esc)"
+            title="Close (Esc)"
           >
             <X size={16} />
           </button>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { fetchJson } from "./fetch-json";
 import { resolveRegion } from "./settings-view";
 
 // ─── data shapes ────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ type CostPayload = {
   burnAlerts: Burn[];
 };
 
-type FunFacts = { ok: boolean; facts?: string[] };
+type FunFacts = { ok: boolean; facts?: string[]; error?: string };
 
 type UserSkills = {
   ok?: boolean;
@@ -120,18 +121,23 @@ export default function WrappedView({
     const qs = filterQS ? `?${filterQS}` : "";
     const wrappedPromise = filterQS
       ? Promise.all([
-          fetch(`/api/metrics/cost-overview${qs}`).then((r) => r.json()),
-          fetch(`/api/metrics/comparison${qs}`).then((r) => r.json()),
+          fetchJson<CostPayload>(`/api/metrics/cost-overview${qs}`),
+          fetchJson<CompareData>(`/api/metrics/comparison${qs}`),
           // user_skills is lifetime-only (not date-filtered) so we always
           // read it from the cached Wrapped snapshot, even with a brush.
-          fetch(`/api/metrics/wrapped`).then((r) => r.json()),
+          fetchJson<{ user_skills?: UserSkills }>(`/api/metrics/wrapped`),
         ]).then(([c, cmp, w]) => ({
           ok: true,
           cost_overview: c,
           comparison: cmp,
           user_skills: w?.user_skills,
         }))
-      : fetch(`/api/metrics/wrapped`).then((r) => r.json());
+      : fetchJson<{
+          ok: boolean;
+          cost_overview: CostPayload;
+          comparison: CompareData;
+          user_skills?: UserSkills;
+        }>(`/api/metrics/wrapped`);
 
     Promise.all([
       wrappedPromise,
@@ -140,7 +146,9 @@ export default function WrappedView({
       (() => {
         const params = new URLSearchParams(filterQS);
         params.set("region", resolveRegion());
-        return fetch(`/api/metrics/fun-facts?${params.toString()}`).then((r) => r.json());
+        return fetchJson<FunFacts>(`/api/metrics/fun-facts?${params.toString()}`).catch(
+          (e) => ({ ok: false, facts: [], error: e instanceof Error ? e.message : String(e) })
+        );
       })(),
     ])
       .then(([snap, fun]) => {
