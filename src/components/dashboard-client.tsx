@@ -13,6 +13,7 @@ import {
   MilestoneConfetti,
 } from "./ux-bits";
 import WrappedView from "./wrapped-view";
+import CrazyView from "./crazy-view";
 import {
   Activity,
   AlertTriangle,
@@ -487,7 +488,7 @@ export default function DashboardClient() {
   // Consolidated post-pivot tab set. "overview", "errors", and "pricing"
   // accept-but-render-as "skills" so deep links from older bookmarks
   // still land somewhere sensible.
-  const [active, setActive] = useState<"cost" | "wrapped" | "skills" | "timeline" | "comparison" | "judgments" | "settings">("cost");
+  const [active, setActive] = useState<"cost" | "wrapped" | "skills" | "timeline" | "comparison" | "judgments" | "crazy" | "settings">("cost");
   // Tabs the user has hidden from the Settings tab. Settings itself can
   // never be hidden — it's the user's escape hatch back to visibility.
   //
@@ -556,6 +557,7 @@ export default function DashboardClient() {
     ["timeline", "Timeline"],
     ["judgments", "Judgments"],
     ["skills", "Skills"],
+    ["crazy", "Crazy"],
     ["settings", "Settings"],
   ];
   const visibleTabs = useMemo(
@@ -2274,6 +2276,7 @@ export default function DashboardClient() {
         <PricingView data={pricing} loading={loading} />
       )}
       {active === "judgments" && <JudgmentsView />}
+      {active === "crazy" && <CrazyView refreshNonce={refreshNonce} />}
       {active === "settings" && <SettingsView />}
 
       {evidence ? (
