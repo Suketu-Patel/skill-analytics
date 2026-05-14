@@ -94,22 +94,28 @@ export function buildPrompt(h, region = "US") {
   const codexSpend = Math.round(h.source_split?.codex || 0);
   const burnDay = h.most_expensive_day;
 
-  return `Generate exactly 7 fun, snarky 1-2 line "did you know?" facts about my AI coding tool usage for a user based in ${flavor.name}. Use vivid, specific ${flavor.name}-resonant comparisons that make scale tangible — pick from things like: ${flavor.metaphors}. ${flavor.currencyHint} Vary the metaphor — never reuse one across the seven facts. Be slightly sarcastic but never mean. Each fact under 25 words. NO emoji. NO markdown. NO numbered list — just one fact per line.
+  return `Generate exactly 7 fun, snarky 1-2 line "did you know?" facts about my AI coding tool usage for a user based in ${flavor.name}. Use vivid, specific ${flavor.name}-resonant comparisons that make scale tangible. Pick from things like: ${flavor.metaphors}. ${flavor.currencyHint} Vary the metaphor; never reuse one across the seven facts. Be slightly sarcastic but never mean. Each fact under 25 words.
 
-REQUIRED coverage — produce exactly one fact for each of these angles, in this order:
-  1. CACHE — what prompt-cache savings bought you
-  2. BURN — the worst-spend day or a spike
-  3. MODEL — Claude vs Codex split or model preference
-  4. SESSION — average-cost-per-session reality check
-  5. SCALE — total spend converted into something physical
-  6. TOKENS — context-window scale (compare millions of tokens to something concrete: novels, encyclopedias, the Library of Congress, etc.)
-  7. WILDCARD — a surprising ratio, oddity, or "you could have bought X instead" punchline drawn from any combination of the numbers
+STRICT formatting rules:
+  - NO emoji.
+  - NO markdown.
+  - NO numbered list. Just one fact per line.
+  - NO em dashes (the long "—" character). Use commas, colons, parentheses, or periods instead. This is a hard rule; any em dash will cause the response to be rejected.
+
+REQUIRED coverage. Produce exactly one fact for each of these angles, in this order:
+  1. CACHE: what prompt-cache savings bought you
+  2. BURN: the worst-spend day or a spike
+  3. MODEL: Claude vs Codex split or model preference
+  4. SESSION: average-cost-per-session reality check
+  5. SCALE: total spend converted into something physical
+  6. TOKENS: context-window scale (compare millions of tokens to something concrete: novels, encyclopedias, the Library of Congress, etc.)
+  7. WILDCARD: a surprising ratio, oddity, or "you could have bought X instead" punchline drawn from any combination of the numbers
 
 My usage:
   - total spend: $${spend.toLocaleString()}
   - avg cost per session: $${avgSession}
   - sessions: ${sessions.toLocaleString()}
-  - tokens consumed (millions): ${tokensTotal.toLocaleString()}M total — ${tokensCached.toLocaleString()}M cached, ${tokensOutput.toLocaleString()}M output${tokensReasoning ? `, ${tokensReasoning.toLocaleString()}M reasoning` : ""}
+  - tokens consumed (millions): ${tokensTotal.toLocaleString()}M total. ${tokensCached.toLocaleString()}M cached, ${tokensOutput.toLocaleString()}M output${tokensReasoning ? `, ${tokensReasoning.toLocaleString()}M reasoning` : ""}
   - prompt cache hit rate: ${cacheHit}%
   - saved by caching: $${saved.toLocaleString()}
   - Claude spend: $${claudeSpend.toLocaleString()}  |  Codex spend: $${codexSpend.toLocaleString()}
@@ -262,10 +268,21 @@ export async function getCostFunFacts(headline, { force = false, region = "US", 
   const hash = sha256(`${KIND}:${region}:${prompt}`);
   const fastHash = fastFunFactsKey({ region, filterQS });
 
+  // Defense in depth. Strip em dashes on every code path that emits
+  // facts (cached or fresh). The user explicitly banned the character;
+  // older cached rows generated before that rule still need scrubbing.
+  const stripEmDashes = (s) =>
+    s.replace(/\s*—\s*/g, ", ").replace(/\s{2,}/g, " ").trim();
+  const scrubFacts = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .filter((f) => typeof f === "string" && f.trim())
+      .map(stripEmDashes)
+      .filter(Boolean);
+
   if (!force) {
     const cached = readCached(fastHash) || readCached(hash);
     if (cached && Array.isArray(cached.facts) && cached.facts.length) {
-      return cached;
+      return { ...cached, facts: scrubFacts(cached.facts) };
     }
   }
 
@@ -298,9 +315,10 @@ export async function getCostFunFacts(headline, { force = false, region = "US", 
     };
   }
 
-  const facts = parsed.facts
-    .filter((f) => typeof f === "string" && f.trim())
-    .slice(0, 8);
+  // stripEmDashes / scrubFacts are defined above (so the cache-hit
+  // path also scrubs). Apply on the fresh path too. Models drift; even
+  // with the prompt rule one will sneak through eventually.
+  const facts = scrubFacts(parsed.facts).slice(0, 8);
 
   const payload = { facts };
   // Write both rows so subsequent calls can fast-path on either key.

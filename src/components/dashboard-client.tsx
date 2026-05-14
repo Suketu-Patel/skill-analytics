@@ -2520,7 +2520,7 @@ function FilterBar({
 
 function SuccessBadge({ rate, calls }: { rate?: number | null; calls?: number }) {
   if (rate == null || !calls) {
-    return <span className="text-xs text-slate-400">—</span>;
+    return <span className="text-xs text-slate-400">n/a</span>;
   }
   const tone = rate >= 90 ? "text-teal" : rate >= 70 ? "text-amber" : "text-coral";
   return (
@@ -3041,7 +3041,7 @@ function ComparisonView({
       {/* Side-by-side totals table — Codex / Claude / Cursor */}
       <div className="panel overflow-hidden">
         <div className="border-b border-line p-4">
-          <h2 className="text-lg font-semibold text-ink">Totals — All Sources</h2>
+          <h2 className="text-lg font-semibold text-ink">Totals across all sources</h2>
           <p className="text-sm text-slate-500">Within the selected date range.</p>
         </div>
         <div className="overflow-x-auto">
@@ -3364,7 +3364,7 @@ function PricingView({ data, loading }: { data: PricingData; loading: boolean })
   if (!totals || totals.overall === 0) {
     return (
       <section className="panel p-8">
-        <EmptyState text="No token data — run Import to populate pricing." />
+        <EmptyState text="No token data. Run Import to populate pricing." />
       </section>
     );
   }
@@ -3447,8 +3447,8 @@ function PricingView({ data, loading }: { data: PricingData; loading: boolean })
             <p className="mt-2 text-4xl font-bold text-teal">{formatUsd(totals.saved_by_caching)}</p>
             <p className="mt-1 text-sm text-slate-600">
               Without caching, the same workload would have cost{" "}
-              <span className="font-semibold text-ink">{formatUsd(wouldHaveCost)}</span>{" "}
-              — that's <span className="font-semibold text-teal">{savingsPct}% off</span>.
+              <span className="font-semibold text-ink">{formatUsd(wouldHaveCost)}</span>.{" "}
+              That's <span className="font-semibold text-teal">{savingsPct}% off</span>.
             </p>
           </div>
           <div className="flex flex-col items-end text-xs text-slate-500">
@@ -3566,7 +3566,7 @@ function PricingView({ data, loading }: { data: PricingData; loading: boolean })
                       {m.model}
                       {!m.priced && (
                         <span className="ml-1.5 rounded bg-amber/10 px-1.5 py-0.5 text-[10px] font-medium text-amber">
-                          unpriced — using fallback
+                          unpriced, using fallback
                         </span>
                       )}
                     </td>
@@ -3596,7 +3596,7 @@ function PricingView({ data, loading }: { data: PricingData; loading: boolean })
                 <td className="px-3 py-2 text-right">{formatTokens(totals.total_fresh_input)}</td>
                 <td className="px-3 py-2 text-right text-teal">{formatTokens(totals.total_cached)}</td>
                 <td className="px-3 py-2 text-right">{formatTokens(totals.total_output)}</td>
-                <td className="px-3 py-2 text-right">—</td>
+                <td className="px-3 py-2 text-right">n/a</td>
                 <td className="px-3 py-2 text-right font-bold text-ink">{formatUsd(totals.overall)}</td>
                 <td className="px-3 py-2" />
               </tr>
@@ -3713,7 +3713,7 @@ function SubscriptionCard({
     <div className={`panel overflow-hidden border-2 ${accent}`}>
       <div className={`flex items-center justify-between px-4 py-3 ${tint}`}>
         <h3 className={`flex items-center gap-2 text-base font-semibold ${text}`}>
-          <Logo size={14} /> {source} — API vs Subscription
+          <Logo size={14} /> {source}: API vs Subscription
         </h3>
       </div>
       <div className="grid grid-cols-2 gap-3 p-4 text-sm">

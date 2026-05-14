@@ -238,19 +238,19 @@ export default function WrappedView({
         <HighlightCard
           accent="rose"
           label="Worst burn day"
-          big={worstBurn ? usd(worstBurn.cost) : "—"}
+          big={worstBurn ? usd(worstBurn.cost) : "n/a"}
           sub={worstBurn ? `${worstBurn.day}${worstBurn.multiple ? ` · ${worstBurn.multiple.toFixed(1)}× median` : ""}` : "no outliers"}
         />
         <HighlightCard
           accent="violet"
           label="Top model"
-          big={topModel ? topModel.model : "—"}
+          big={topModel ? topModel.model : "n/a"}
           sub={topModel ? `${usd(topModel.cost)} · ${topModel.sessions} sessions` : ""}
         />
         <HighlightCard
           accent="amber"
           label="Top project"
-          big={topProject ? projectLabel(topProject.cwd, topProject.cwd_short) : "—"}
+          big={topProject ? projectLabel(topProject.cwd, topProject.cwd_short) : "n/a"}
           sub={topProject ? `${usd(topProject.cost)} · ${topProject.sessions} sessions` : ""}
           mono
         />
@@ -347,7 +347,7 @@ function SourceCard({
         <CardStat label="Spend" value={usd(spend)} tone="bold" />
         <CardStat
           label="Avg / session"
-          value={sessions > 0 ? `$${(spend / sessions).toFixed(3)}` : "—"}
+          value={sessions > 0 ? `$${(spend / sessions).toFixed(3)}` : "n/a"}
           tone="muted"
         />
       </div>

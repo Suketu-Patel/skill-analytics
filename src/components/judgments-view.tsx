@@ -67,12 +67,12 @@ type Job = {
 };
 
 function fmtNum(n: unknown, digits = 1) {
-  if (typeof n !== "number" || Number.isNaN(n)) return "—";
+  if (typeof n !== "number" || Number.isNaN(n)) return "n/a";
   return n.toFixed(digits);
 }
 
 function fmtDelta(d: number) {
-  if (d == null) return "—";
+  if (d == null) return "n/a";
   const a = Math.abs(d);
   const cls = a >= 3 ? "text-rose-600" : a >= 2 ? "text-amber-600" : "text-slate-500";
   return <span className={`font-semibold tabular-nums ${cls}`}>{d > 0 ? "+" : ""}{d}</span>;
@@ -251,16 +251,16 @@ export default function JudgmentsView() {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatTile
           label="Total invocations"
-          value={counts?.total_invocations ?? "—"}
+          value={counts?.total_invocations ?? "n/a"}
           hint={
             counts
               ? `${counts.skill_invocations} Skill · ${counts.agent_invocations} Agent`
               : undefined
           }
         />
-        <StatTile label="Haiku judged" value={counts?.haiku_judged ?? "—"} hint={`${unjudgedHaiku} unjudged`} />
-        <StatTile label="Codex judged" value={counts?.codex_judged ?? "—"} />
-        <StatTile label="Corrections seen" value={counts?.corrections ?? "—"} hint="user pushed back on next turn" />
+        <StatTile label="Haiku judged" value={counts?.haiku_judged ?? "n/a"} hint={`${unjudgedHaiku} unjudged`} />
+        <StatTile label="Codex judged" value={counts?.codex_judged ?? "n/a"} />
+        <StatTile label="Corrections seen" value={counts?.corrections ?? "n/a"} hint="user pushed back on next turn" />
       </div>
 
       <div className="panel flex flex-wrap items-center gap-2 p-3">
@@ -358,11 +358,11 @@ export default function JudgmentsView() {
 
       <div className="panel overflow-hidden">
         <header className="border-b border-line bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Drift watch — Haiku vs Codex
+          Drift watch: Haiku vs Codex
         </header>
         {!data || data.drift.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">
-            No drift data yet — needs both Haiku and Codex judgments on the same invocations.
+            No drift data yet. Needs both Haiku and Codex judgments on the same invocations.
             Run Haiku first, then run Codex 2nd opinion.
           </div>
         ) : (
@@ -390,7 +390,7 @@ export default function JudgmentsView() {
 
       <div className="panel overflow-hidden">
         <header className="border-b border-line bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Corroborated low scores — judge ≤ 4 and user corrected
+          Corroborated low scores: judge ≤ 4 and user corrected
         </header>
         {!data || data.corroborated.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">

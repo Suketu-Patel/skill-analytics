@@ -146,7 +146,7 @@ const shortTime = (iso: string | null) => {
 };
 
 const dur = (ms: number | null) => {
-  if (!ms) return "—";
+  if (!ms) return "n/a";
   const min = ms / 60_000;
   if (min < 1) return `${Math.round(ms / 1000)}s`;
   if (min < 60) return `${min.toFixed(1)}m`;
@@ -526,7 +526,7 @@ export default function CostOverviewView({
             Daily Spend
             {onSelectRange && (
               <span className="ml-2 text-xs font-normal text-slate-400">
-                — drag to filter
+                drag to filter
               </span>
             )}
             <PanelAnchor id="daily-spend" />
@@ -665,7 +665,7 @@ export default function CostOverviewView({
             days where spend &gt; 3× median ({usd(h.median_daily_cost)}/day)
           </p>
           {data.burnAlerts.length === 0 ? (
-            <div className="mt-3 text-sm text-slate-500">Spend is steady — no outlier days.</div>
+            <div className="mt-3 text-sm text-slate-500">Spend is steady. No outlier days.</div>
           ) : (
             <ul className="mt-3 divide-y divide-line">
               {data.burnAlerts.slice(0, 6).map((a) => (

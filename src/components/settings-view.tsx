@@ -269,7 +269,7 @@ export default function SettingsView() {
               How often the dashboard re-imports{" "}
               <span className="mono text-xs">~/.claude</span> and{" "}
               <span className="mono text-xs">~/.codex</span> in the background. The minimum is{" "}
-              {MIN_SYNC_MINUTES} minutes — anything faster pegs the importer. Leave blank to disable.
+              {MIN_SYNC_MINUTES} minutes. Anything faster pegs the importer. Leave blank to disable.
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <input
@@ -403,7 +403,7 @@ export default function SettingsView() {
                       : "border-teal bg-teal text-white"
                   }`}
                   aria-label={isHidden ? `Show ${sourceLabels[id]}` : `Hide ${sourceLabels[id]}`}
-                  title={isHidden ? "Hidden — click to show" : "Visible — click to hide"}
+                  title={isHidden ? "Hidden, click to show" : "Visible, click to hide"}
                 >
                   {isHidden ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -449,7 +449,7 @@ export default function SettingsView() {
                       : "border-teal bg-teal text-white"
                   }`}
                   aria-label={isHidden ? `Show ${opt.label}` : `Hide ${opt.label}`}
-                  title={isHidden ? "Hidden — click to show" : "Visible — click to hide"}
+                  title={isHidden ? "Hidden, click to show" : "Visible, click to hide"}
                 >
                   {isHidden ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -472,7 +472,7 @@ export default function SettingsView() {
         <p className="mt-1 text-sm text-slate-500">
           Local-first dashboard. Everything you see is computed from{" "}
           <span className="mono text-xs">~/.claude</span> and{" "}
-          <span className="mono text-xs">~/.codex</span> transcripts on this machine —
+          <span className="mono text-xs">~/.codex</span> transcripts on this machine;
           your usage data stays here. Three surfaces reach out:
           AI fun facts call{" "}
           <span className="mono text-xs">claude -p</span> (Haiku) via your existing
@@ -582,7 +582,7 @@ function PricingValidatorPanel() {
             )}
             {!info?.present && (
               <span className="text-slate-400">
-                No validation run yet — &quot;Refresh now&quot; to seed.
+                No validation run yet. Click &quot;Refresh now&quot; to seed.
               </span>
             )}
             {msg && (

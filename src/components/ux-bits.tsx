@@ -187,7 +187,7 @@ export function MilestoneConfetti({ snapshot }: { snapshot: MilestoneSnapshot | 
       triggered.push(`Crossed $${s.toLocaleString()} in lifetime spend`)
     );
     crossedSteps(seen.saved, snapshot.saved, SAVED_STEPS).forEach((s) =>
-      triggered.push(`Cached $${s.toLocaleString()} of input — that's a lot of cheap reads`)
+      triggered.push(`Cached $${s.toLocaleString()} of input. That's a lot of cheap reads`)
     );
     crossedSteps(seen.tokens, snapshot.tokens, TOKEN_STEPS).forEach((s) => {
       const lbl = s >= 1_000_000_000 ? `${s / 1_000_000_000}B` : `${s / 1_000_000}M`;
