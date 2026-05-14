@@ -729,23 +729,66 @@ export function aiFingerprint() {
       }
     }
   }
-  // Top-N for both bigrams and trigrams. Trigrams read better as
-  // "phrases" (more specific) so we lean on them when they have
-  // comparable volume. Surface a top-5 list, not just the single
-  // winner, so the texture comes through.
-  const sortedBigrams = [...bigramCounts.entries()].sort((a, b) => b[1] - a[1]);
-  const sortedTrigrams = [...trigramCounts.entries()].sort((a, b) => b[1] - a[1]);
-  // Merge: trigrams whose count is at least 0.5x top bigram are
-  // promoted into the favorite list; otherwise bigrams dominate.
-  const topBigramCount = sortedBigrams[0]?.[1] || 0;
+  // Score each phrase by raw count × an information-density weight.
+  // Phrases made entirely of low-info words ("want to", "can you")
+  // get a 70% haircut so they don't dominate the list just because
+  // English speakers all repeat the same auxiliaries. Domain words
+  // ("ship it", "fix the bug", "render the chart") survive at full
+  // weight and bubble up even at lower raw counts.
+  //
+  // Tunable: 1.0 = no penalty, 0.0 = phrase ignored entirely.
+  const LOW_INFO = new Set([
+    // Stopwords are already in STOP; this layer is for the next tier
+    // up: high-frequency auxiliaries / generic verbs that form most
+    // English filler. Keep nouns + adjectives OUT — those carry signal.
+    "can","cant","could","may","might","must","should","shall","will","would",
+    "want","wants","wanted","need","needs","needed",
+    "make","makes","made","take","takes","took","get","gets","got",
+    "do","does","did","done","go","goes","went","gone","come","came",
+    "let","lets","see","saw","seen","look","looked","looks",
+    "know","knows","knew","known","think","thought","tell","told","said",
+    "say","says","use","uses","used","try","tries","tried",
+    "find","found","keep","kept","put","help","helped",
+    "sure","just","like","also","then","now","still","really","very","too",
+    "first","next","last","new","old","good","bad","right","wrong","fine",
+  ]);
+  function phraseWeight(phrase) {
+    const words = phrase.split(" ");
+    const lowInfoHits = words.reduce(
+      (n, w) => n + (LOW_INFO.has(w) || STOP.has(w) ? 1 : 0),
+      0
+    );
+    // 0 low-info words → weight 1.0 (full credit, domain phrase)
+    // 1 low-info word  → weight 0.6 (one anchor word, partial credit)
+    // 2 low-info words → weight 0.35
+    // 3 low-info words → weight 0.25
+    if (lowInfoHits === 0) return 1.0;
+    if (lowInfoHits === 1) return 0.6;
+    if (lowInfoHits === 2) return 0.35;
+    return 0.25;
+  }
+
+  // Top-N for both bigrams and trigrams, weighted. Trigrams read
+  // better as "phrases" (more specific) so we lean on them when they
+  // have comparable weighted-score.
+  const scoreBigram = ([phrase, count]) => ({
+    phrase, count, n: 2, weight: phraseWeight(phrase), score: count * phraseWeight(phrase),
+  });
+  const scoreTrigram = ([phrase, count]) => ({
+    phrase, count, n: 3, weight: phraseWeight(phrase), score: count * phraseWeight(phrase),
+  });
+  const sortedBigrams = [...bigramCounts.entries()].map(scoreBigram).sort((a, b) => b.score - a.score);
+  const sortedTrigrams = [...trigramCounts.entries()].map(scoreTrigram).sort((a, b) => b.score - a.score);
+  // Merge: trigrams whose weighted score is at least 0.5x top bigram
+  // are promoted into the favorite list; otherwise bigrams dominate.
+  const topBigramScore = sortedBigrams[0]?.score || 0;
   const merged = [
-    ...sortedTrigrams
-      .filter(([, c]) => c >= topBigramCount * 0.5)
-      .map(([phrase, count]) => ({ phrase, count, n: 3 })),
-    ...sortedBigrams.map(([phrase, count]) => ({ phrase, count, n: 2 })),
+    ...sortedTrigrams.filter((t) => t.score >= topBigramScore * 0.5),
+    ...sortedBigrams,
   ]
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(({ phrase, count, n }) => ({ phrase, count, n }));
   const favoritePhrase = merged[0] || null;
 
   const sortedFrustration = [...frustrationCounts.entries()]
