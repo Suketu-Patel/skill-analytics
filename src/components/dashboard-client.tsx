@@ -309,7 +309,8 @@ function StatCard({
   detail,
   icon: Icon,
   tone = "teal",
-  loading = false
+  loading = false,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -317,6 +318,7 @@ function StatCard({
   icon: typeof Activity;
   tone?: "teal" | "coral" | "amber" | "violet" | "emerald";
   loading?: boolean;
+  onClick?: () => void;
 }) {
   const toneClass = {
     teal: "bg-teal/10 text-teal",
@@ -325,8 +327,21 @@ function StatCard({
     violet: "bg-violet/10 text-violet",
     emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
   }[tone];
+  const Wrap = onClick
+    ? ({ children }: { children: React.ReactNode }) => (
+        <button
+          type="button"
+          onClick={onClick}
+          className="metric-card p-4 text-left transition-colors hover:border-teal/40 hover:bg-teal/5 focus:outline-none focus:ring-2 focus:ring-teal"
+        >
+          {children}
+        </button>
+      )
+    : ({ children }: { children: React.ReactNode }) => (
+        <div className="metric-card p-4">{children}</div>
+      );
   return (
-    <div className="metric-card p-4">
+    <Wrap>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
@@ -346,7 +361,7 @@ function StatCard({
           <Icon size={18} />
         </div>
       </div>
-    </div>
+    </Wrap>
   );
 }
 
@@ -635,6 +650,7 @@ export default function DashboardClient() {
   const [severityFilter, setSeverityFilter] = useState<"all" | "error" | "warn">("all");
   const [insights, setInsights] = useState<Insights>({});
   const [skillDetailName, setSkillDetailName] = useState<string | null>(null);
+  const [authoredModalOpen, setAuthoredModalOpen] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
@@ -916,6 +932,11 @@ export default function DashboardClient() {
           setSkillDetailName(null);
           return;
         }
+        if (authoredModalOpen) {
+          e.preventDefault();
+          setAuthoredModalOpen(false);
+          return;
+        }
         if (projectScope) {
           e.preventDefault();
           setProjectScope(null);
@@ -935,7 +956,7 @@ export default function DashboardClient() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, importing, projectScope, evidence, skillDetailName, visibleTabs, sourceFilter]);
+  }, [active, importing, projectScope, evidence, skillDetailName, visibleTabs, sourceFilter, authoredModalOpen]);
 
   // Auto-sync at the user-configured cadence while the tab is open.
   // Skip if a manual import is already in flight (avoids overlapping
@@ -1240,7 +1261,63 @@ export default function DashboardClient() {
           setActive("settings");
         },
       },
+      {
+        id: "action-authored-skills",
+        group: "Actions",
+        label: "Skills you made: open the list",
+        keywords: [
+          "authored", "mine", "my skills", "user-made", "you made",
+          "made yourself", "what did i build", "personal", "custom", "homemade",
+        ],
+        onPick: () => setAuthoredModalOpen(true),
+      },
+      {
+        id: "action-source-banner-clear",
+        group: "Actions",
+        label: "Clear source filter",
+        hint: "Esc",
+        keywords: ["source", "filter", "reset", "all sources", "clear"],
+        onPick: () => setSourceFilter("all"),
+      },
     );
+
+    // — Auto-discovery: pick up any element in the page tagged with
+    //   data-palette-label="..." so new features become reachable from
+    //   ⌘K without manually editing this registry. Drop the same
+    //   attribute on a new button/link and it shows up here on the
+    //   palette's next open. Optional data-palette-keywords (comma-list)
+    //   widens the search index for that entry.
+    //
+    //   This runs at palette-build time which is whenever the memo
+    //   deps change; the palette opens on demand, so even slow rebuilds
+    //   are invisible to the user.
+    if (typeof document !== "undefined") {
+      const seen = new Set(items.map((i) => i.id));
+      document.querySelectorAll<HTMLElement>("[data-palette-label]").forEach((el, idx) => {
+        const label = el.dataset.paletteLabel || "";
+        if (!label) return;
+        const id = el.dataset.paletteId || `auto-${label.replace(/\s+/g, "-").toLowerCase()}-${idx}`;
+        if (seen.has(id)) return;
+        seen.add(id);
+        const group = el.dataset.paletteGroup || "Page";
+        const keywords = (el.dataset.paletteKeywords || "")
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+        items.push({
+          id,
+          group,
+          label,
+          keywords,
+          onPick: () => {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            // Synthesize a click so the element's own handler fires (open
+            // modal, toggle filter, etc.). Buttons + links both respond.
+            (el as HTMLElement).click?.();
+          },
+        });
+      });
+    }
 
     // — Skills (capped at 30 to keep the palette snappy; query
     //   narrows further).
@@ -1664,15 +1741,16 @@ export default function DashboardClient() {
               | undefined;
             const claude = Number(bySrc?.claude || 0);
             const codex = Number(bySrc?.codex || 0);
-            if (!claude && !codex) return "Skills and agents you authored";
+            if (!claude && !codex) return "Click to see the list";
             const parts: string[] = [];
             if (claude) parts.push(`${claude} Claude`);
             if (codex) parts.push(`${codex} Codex`);
-            return parts.join(" · ");
+            return `${parts.join(" · ")} · click to view`;
           })()}
           icon={Hammer}
           tone="emerald"
           loading={loading && !overview.totals}
+          onClick={() => setAuthoredModalOpen(true)}
         />
         <StatCard
           label="Skill Events"
@@ -1704,7 +1782,13 @@ export default function DashboardClient() {
       {active === "cost" && (
         <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} refreshNonce={refreshNonce} />
       )}
-      {active === "wrapped" && <WrappedView filterQS={filterQS} refreshNonce={refreshNonce} />}
+      {active === "wrapped" && (
+        <WrappedView
+          filterQS={filterQS}
+          refreshNonce={refreshNonce}
+          onOpenAuthored={() => setAuthoredModalOpen(true)}
+        />
+      )}
 
       {active === "skills" && (
         <div className="flex flex-col gap-3">
@@ -2204,6 +2288,9 @@ export default function DashboardClient() {
           }}
         />
       ) : null}
+      {authoredModalOpen ? (
+        <AuthoredSkillsModal onClose={() => setAuthoredModalOpen(false)} />
+      ) : null}
 
       {/* Global overlays: ⌘K palette + milestone confetti. Palette
           items are computed from current state (top skills, recent
@@ -2279,6 +2366,108 @@ function EvidenceBlock({ label, value, tone = "neutral" }: { label: string; valu
       <pre className={`mono whitespace-pre-wrap break-words rounded-md border px-3 py-2 text-xs ${toneClasses}`}>
         {value}
       </pre>
+    </div>
+  );
+}
+
+type AuthoredSkillRow = {
+  name: string;
+  kind: string;
+  source: "claude" | "codex";
+  path: string;
+  description: string | null;
+};
+
+function AuthoredSkillsModal({ onClose }: { onClose: () => void }) {
+  const [items, setItems] = useState<AuthoredSkillRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/skills/authored")
+      .then((r) => r.json())
+      .then((d) => setItems(Array.isArray(d.items) ? d.items : []))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const grouped = useMemo(() => {
+    const m: Record<string, AuthoredSkillRow[]> = { claude: [], codex: [] };
+    items.forEach((it) => {
+      (m[it.source] ||= []).push(it);
+    });
+    return m;
+  }, [items]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="panel flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-line p-4">
+          <div>
+            <h2 className="text-lg font-semibold text-ink">Skills you made</h2>
+            <p className="text-xs text-slate-500">
+              {loading ? "Loading..." : `${items.length} skills authored locally, vendor and plugin skills excluded`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-line px-3 py-1 text-xs font-medium hover:border-coral"
+          >
+            ✕ Close (Esc)
+          </button>
+        </div>
+        <div className="overflow-y-auto p-4">
+          {loading ? (
+            <div className="py-12 text-center text-sm text-slate-500">Loading...</div>
+          ) : items.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-500">
+              No user-authored skills yet. Drop a SKILL.md in ~/.claude/skills/&lt;name&gt;/
+              or a .toml in .codex/agents/ and re-import.
+            </div>
+          ) : (
+            (["claude", "codex"] as const).map((src) =>
+              grouped[src].length === 0 ? null : (
+                <section key={src} className="mb-5 last:mb-0">
+                  <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full ${
+                        src === "claude" ? "bg-claude" : "bg-codex"
+                      }`}
+                    />
+                    {src === "claude" ? "Claude" : "Codex"} ({grouped[src].length})
+                  </h3>
+                  <ul className="flex flex-col gap-1.5">
+                    {grouped[src].map((row) => (
+                      <li
+                        key={row.path}
+                        className="rounded-md border border-line bg-white p-3 dark:bg-slate-900"
+                      >
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="font-mono text-sm font-semibold text-ink">{row.name}</span>
+                          <span className="shrink-0 text-[10px] uppercase tracking-wider text-slate-400">
+                            {row.kind.replace("_", " ")}
+                          </span>
+                        </div>
+                        {row.description && (
+                          <p className="mt-1 line-clamp-2 text-xs text-slate-500">{row.description}</p>
+                        )}
+                        <p className="mt-1 truncate font-mono text-[10px] text-slate-400" title={row.path}>
+                          {row.path}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )
+            )
+          )}
+        </div>
+      </div>
     </div>
   );
 }

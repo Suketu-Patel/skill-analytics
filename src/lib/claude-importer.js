@@ -401,6 +401,88 @@ function importClaudeSession(batch, file) {
   return { lines: lineNum };
 }
 
+// Parse the YAML-style frontmatter at the top of a SKILL.md / agent .md.
+// We only need name + description, so a tiny hand-rolled parser is fine.
+function parseClaudeFrontmatter(text) {
+  const out = { name: null, description: null };
+  if (!text || !text.startsWith("---")) return out;
+  const end = text.indexOf("\n---", 3);
+  if (end < 0) return out;
+  const block = text.slice(3, end);
+  const nameMatch = block.match(/^name:\s*(.+?)\s*$/m);
+  if (nameMatch) out.name = nameMatch[1].replace(/^["']|["']$/g, "");
+  // description can be a single line or a "|" block; grab the first line either way.
+  const descMatch = block.match(/^description:\s*(?:\|\s*\n\s*(.+?)|(.+?))\s*$/m);
+  if (descMatch) out.description = (descMatch[1] || descMatch[2] || "").trim();
+  return out;
+}
+
+// Scan ~/.claude/skills/<name>/SKILL.md and ~/.claude/agents/*.md for skills
+// that exist on disk. The session-JSONL importer only learns about skills
+// it sees mentioned in transcripts (and stores path=NULL), so anything the
+// user wrote but hasn't invoked yet was invisible. Walking the filesystem
+// fills that in and gives each row a real path, which is what the
+// "user-authored" filter in metrics.js keys off of.
+function scanClaudeSkillsFromDisk(batch) {
+  const home = path.join(os.homedir(), ".claude");
+  const skillsDir = path.join(home, "skills");
+  const agentsDir = path.join(home, "agents");
+  let found = 0;
+
+  function upsertWithPath(name, kind, descr, fullPath) {
+    // INSERT OR REPLACE so we overwrite the path-less row created by the
+    // session importer when the same skill was also mentioned in a
+    // transcript. Without REPLACE the path stays NULL forever.
+    batch.add(`INSERT OR REPLACE INTO skills
+      (name, kind, path, description, description_hash, updated_at, source)
+      VALUES (${sqlString(name)}, ${sqlString(kind)}, ${sqlString(fullPath)},
+      ${sqlString(descr || "")}, ${sqlString(sha256(descr || ""))},
+      ${sqlString(nowIso())}, ${sqlString(SOURCE)})`);
+    found++;
+  }
+
+  // Skills: each subdir holds a SKILL.md. The dirname is the skill name.
+  // Many entries in ~/.claude/skills/ are symlinks into ~/.claude/skills/gstack/<name>,
+  // so we resolve symlinks (statSync follows them) and store the resolved
+  // path. The metrics.js user-authored filter then excludes anything that
+  // resolves into a /gstack/ subtree without us having to special-case it.
+  if (fs.existsSync(skillsDir)) {
+    for (const name of fs.readdirSync(skillsDir)) {
+      const entryPath = path.join(skillsDir, name);
+      let isDir = false;
+      try {
+        isDir = fs.statSync(entryPath).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDir) continue;
+      const skillFile = path.join(entryPath, "SKILL.md");
+      if (!fs.existsSync(skillFile)) continue;
+      let resolved = skillFile;
+      try {
+        resolved = fs.realpathSync(skillFile);
+      } catch {
+        // keep skillFile as-is
+      }
+      const parsed = parseClaudeFrontmatter(safeRead(resolved));
+      upsertWithPath(parsed.name || name, "claude_skill", parsed.description, resolved);
+    }
+  }
+
+  // Agents: flat .md files. The filename (sans .md) is the agent name.
+  if (fs.existsSync(agentsDir)) {
+    for (const file of fs.readdirSync(agentsDir)) {
+      if (!file.endsWith(".md")) continue;
+      const full = path.join(agentsDir, file);
+      const parsed = parseClaudeFrontmatter(safeRead(full));
+      const name = parsed.name || file.replace(/\.md$/, "");
+      upsertWithPath(name, "claude_agent", parsed.description, full);
+    }
+  }
+
+  return found;
+}
+
 export function importClaude() {
   const projects = listClaudeProjects();
   const batch = new SqlBatch();
@@ -414,11 +496,15 @@ export function importClaude() {
       totalLines += importClaudeSession(batch, file).lines;
     }
   }
+  // Filesystem scan runs after the session sweep so on-disk rows
+  // overwrite the path-less placeholders created by JSONL mentions.
+  const skillsFound = scanClaudeSkillsFromDisk(batch);
   batch.flush();
   return {
     source: "claude",
     projects: projects.length,
     sessionFiles: totalFiles,
-    sessionLines: totalLines
+    sessionLines: totalLines,
+    skillsOnDisk: skillsFound
   };
 }

@@ -95,12 +95,17 @@ function anonProjects(projects: ByProject[]): Map<string, string> {
 export default function WrappedView({
   filterQS,
   refreshNonce = 0,
+  onOpenAuthored,
 }: {
   filterQS: string;
   // Bumped by the parent after sync. Suppresses the loading flash on
   // refresh so the previous snapshot stays visible until the new one
   // arrives, then swaps atomically.
   refreshNonce?: number;
+  // Click handler for "Skills you made" -> opens the parent-owned modal
+  // that lists the authored skills. Optional so tests/storybook can mount
+  // the view without wiring a modal host.
+  onOpenAuthored?: () => void;
 }) {
   const [cost, setCost] = useState<CostPayload | null>(null);
   const [comparison, setComparison] = useState<CompareData | null>(null);
@@ -290,12 +295,13 @@ export default function WrappedView({
             sub={(() => {
               const claude = userSkills?.by_source?.claude || 0;
               const codex = userSkills?.by_source?.codex || 0;
-              if (!claude && !codex) return "across Claude + Codex";
+              if (!claude && !codex) return "click to view";
               const parts: string[] = [];
               if (claude) parts.push(`${claude} Claude`);
               if (codex) parts.push(`${codex} Codex`);
               return parts.join(" · ");
             })()}
+            onClick={onOpenAuthored}
           />
           <BigStat
             label="Avg / session"
@@ -458,14 +464,27 @@ function BigStat({
   value,
   muted = false,
   sub,
+  onClick,
 }: {
   label: string;
   value: string;
   muted?: boolean;
   sub?: string;
+  onClick?: () => void;
 }) {
+  const Wrap = onClick
+    ? ({ children }: { children: React.ReactNode }) => (
+        <button
+          type="button"
+          onClick={onClick}
+          className="-m-1 rounded-md p-1 text-left transition-colors hover:bg-teal/5 focus:outline-none focus:ring-2 focus:ring-teal"
+        >
+          {children}
+        </button>
+      )
+    : ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   return (
-    <div>
+    <Wrap>
       <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
         {label}
       </div>
@@ -477,6 +496,6 @@ function BigStat({
         {value}
         {sub && <span className="ml-1 text-[10px] font-medium text-slate-400">{sub}</span>}
       </div>
-    </div>
+    </Wrap>
   );
 }

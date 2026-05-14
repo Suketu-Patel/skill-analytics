@@ -159,6 +159,30 @@ export function getOverviewMetrics(opts = {}) {
  * and user-installed skills under ~/.codex/skills/ or ~/.claude/skills/.
  * The numbers are approximate — there's no metadata flag for authorship.
  */
+/**
+ * Return the actual list of user-authored skills, ordered by source then
+ * name. Same filter as getUserSkillCounts. Used by the "Skills you made"
+ * modal so the user can see exactly which ones the count refers to.
+ */
+export function getUserAuthoredSkillsList(opts = {}) {
+  const sourceFilter =
+    opts?.source && opts.source !== "all"
+      ? ` AND source = ${sqlString(opts.source)}`
+      : "";
+  return queryRows(`
+    SELECT name, kind, source, path, description
+    FROM skills
+    WHERE kind IN ('skill','agent','claude_skill','claude_agent')
+      AND path IS NOT NULL
+      AND path != ''
+      AND path NOT LIKE '%/.system/%'
+      AND path NOT LIKE '%/plugins/%'
+      AND path NOT LIKE '%/gstack/%'
+      ${sourceFilter}
+    ORDER BY source, name
+  `);
+}
+
 export function getUserSkillCounts(opts = {}) {
   const sourceFilter =
     opts?.source && opts.source !== "all"
