@@ -24,6 +24,7 @@ import {
   Ghost,
   Info,
   MessageCircle,
+  Moon,
   Quote,
   Repeat,
 } from "lucide-react";
@@ -41,6 +42,12 @@ type CrazyPayload = {
     peak_hour: number | null;
     baseline_rate: number;
     takeaway: string | null;
+  };
+  day_night: {
+    by_hour: { hour: number; frustration_rate: number; fail_rate: number }[];
+    takeaway: string | null;
+    day_avg: { frustration: number; fail: number };
+    night_avg: { frustration: number; fail: number };
   };
   cost_per_loc: {
     cwd: string;
@@ -120,6 +127,8 @@ export default function CrazyView({ refreshNonce = 0 }: { refreshNonce?: number 
       <ContextDegradation data={data.context_degradation} />
 
       <FrustrationCurve data={data.frustration} />
+
+      <DayNightCurve data={data.day_night} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <PepTalkPanel data={data.pep_talk} />
@@ -504,6 +513,48 @@ function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+// ─── Day vs night: frustration AND outcome ─────────────────────────────
+
+function DayNightCurve({ data }: { data: CrazyPayload["day_night"] }) {
+  const chart = data.by_hour.map((b) => ({
+    hour: String(b.hour).padStart(2, "0"),
+    you: Math.round(b.frustration_rate * 1000) / 10,
+    model: Math.round(b.fail_rate * 1000) / 10,
+  }));
+  return (
+    <Panel>
+      <PanelHeader
+        Icon={Moon}
+        title="Day vs night: you and the model"
+        takeaway={data.takeaway}
+        info="Two lines, same hour-of-day axis. Coral line = your frustration rate (% of your messages that contain pushback words). Teal line = tool-failure rate (% of AI tool calls that returned a non-zero exit code). Compare shapes: if both rise at night, late hours hurt both of you. If only one rises, tiredness and AI quality are decoupled."
+        right={`night vs day · you: ${data.day_avg.frustration > 0 ? Math.round(((data.night_avg.frustration - data.day_avg.frustration) / data.day_avg.frustration) * 100) : 0}% · model: ${data.day_avg.fail > 0 ? Math.round(((data.night_avg.fail - data.day_avg.fail) / data.day_avg.fail) * 100) : 0}%`}
+      />
+      <ResponsiveContainer width="100%" height={240}>
+        <LineChart data={chart} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+          <YAxis tick={{ fontSize: 10 }} unit="%" />
+          <Tooltip
+            formatter={(v: number, name: string) => [`${v}%`, name === "you" ? "Your frustration" : "Tool failure"]}
+            labelFormatter={(l: string) => `Hour ${l}`}
+          />
+          <Line type="monotone" dataKey="you" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="you" />
+          <Line type="monotone" dataKey="model" stroke="#14b8a6" strokeWidth={2} dot={{ r: 3 }} name="model" />
+        </LineChart>
+      </ResponsiveContainer>
+      <div className="mt-2 flex items-center gap-4 text-[11px] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-3 rounded-sm bg-coral" /> your frustration
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-3 rounded-sm bg-teal" /> tool-failure rate
+        </span>
+      </div>
     </Panel>
   );
 }

@@ -932,6 +932,72 @@ export function aiFingerprint() {
   };
 }
 
+// — Day vs night: frustration AND outcome by hour ────────────────────
+//
+// Two-line companion to frustrationByHour. Frustration tracks how YOU
+// feel hour-by-hour; this also tracks how the MODEL actually performs
+// (tool-failure rate per hour). The shape comparison reveals:
+//   - both rise late: late nights hurt you and the model
+//   - frustration rises, fails flat: it's tiredness, not the model
+//   - fails rise, frustration flat: model gets sloppy but you don't notice
+//   - both flat: no clear time-of-day effect
+export function dayNightCurve() {
+  // Pull pre-bucketed frustration from the existing pipeline.
+  const frust = frustrationByHour();
+  const frustByHour = new Map(frust.by_hour.map((b) => [b.hour, b.rate]));
+
+  // Per-hour tool failure: join tool_events to turns for the timestamp.
+  const fails = queryRows(`
+    SELECT CAST(strftime('%H', t.started_at) AS INTEGER) AS h,
+           COUNT(*) AS total,
+           SUM(CASE WHEN te.exit_code IS NOT NULL AND te.exit_code <> 0 THEN 1 ELSE 0 END) AS fails
+    FROM tool_events te
+    JOIN turns t ON t.turn_id = te.turn_id
+    WHERE t.started_at IS NOT NULL
+    GROUP BY h
+  `);
+  const failByHour = new Map();
+  for (const r of fails) {
+    const h = Number(r.h);
+    const total = Number(r.total);
+    if (total >= 50) failByHour.set(h, Number(r.fails) / total);
+  }
+  const by_hour = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    frustration_rate: frustByHour.get(h) || 0,
+    fail_rate: failByHour.get(h) || 0,
+  }));
+
+  // Takeaway: compute night-vs-day delta for each line. "Night" = 22-04,
+  // "Day" = 09-17. If either delta is sharp and they don't agree, that's
+  // the story.
+  const day = by_hour.filter((b) => b.hour >= 9 && b.hour <= 17);
+  const night = by_hour.filter((b) => b.hour >= 22 || b.hour <= 4);
+  const avg = (arr, key) => (arr.length ? arr.reduce((a, b) => a + b[key], 0) / arr.length : 0);
+  const fDay = avg(day, "frustration_rate");
+  const fNight = avg(night, "frustration_rate");
+  const xDay = avg(day, "fail_rate");
+  const xNight = avg(night, "fail_rate");
+  const frustLift = fDay > 0 ? (fNight - fDay) / fDay : 0;
+  const failLift = xDay > 0 ? (xNight - xDay) / xDay : 0;
+  let takeaway = null;
+  const trend = (lift) => (lift > 0.25 ? "up" : lift < -0.25 ? "down" : "flat");
+  const fT = trend(frustLift);
+  const xT = trend(failLift);
+  if (fT === "up" && xT === "up") {
+    takeaway = `Both rise at night: you push back ${Math.round(frustLift * 100)}% more and tools fail ${Math.round(failLift * 100)}% more after 22:00 vs daytime. Late nights hurt both of you.`;
+  } else if (fT === "up" && xT !== "up") {
+    takeaway = `You get ${Math.round(frustLift * 100)}% more frustrated at night while tools fail at the same rate. It's tiredness, not the model.`;
+  } else if (fT !== "up" && xT === "up") {
+    takeaway = `Tools fail ${Math.round(failLift * 100)}% more at night while your pushback stays flat. The model gets sloppy after dark; you might not notice.`;
+  } else if (fT === "down" && xT === "down") {
+    takeaway = `Both drop after hours. You're calmer and the AI is cleaner. Whatever you're doing at night is working.`;
+  } else {
+    takeaway = `Day-vs-night looks flat for both lines. No obvious time-of-day effect.`;
+  }
+  return { by_hour, takeaway, day_avg: { frustration: fDay, fail: xDay }, night_avg: { frustration: fNight, fail: xNight } };
+}
+
 // — Hero verdict ───────────────────────────────────────────────────────
 //
 // Distill the most striking findings into one sentence shown at the

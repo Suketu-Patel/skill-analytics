@@ -19,6 +19,7 @@ import {
   toolTransitions,
   pepTalkIndex,
   aiFingerprint,
+  dayNightCurve,
   heroVerdict,
   learnNoisePhrases,
 } from "./crazy.js";
@@ -70,6 +71,7 @@ export function precomputeCrazySnapshot() {
     generated_at: nowIso(),
     verdict,
     frustration,
+    day_night: dayNightCurve(),
     cost_per_loc: costPerLOCKept(),
     context_degradation: contextDegradation,
     phantom_edits: phantomEdits(),
