@@ -440,10 +440,26 @@ export function aiFingerprint() {
     "their","theirs","com","de","la","el","et","un","une",
   ]);
   // Common short-phrase noise that drowns out the actual signal.
+  // Two classes: connective tissue ("you can", "it is") and agent-brief
+  // boilerplate ("the user", "the file") that the user types when
+  // writing instructions FOR an LLM, not when talking conversationally.
   const PHRASE_BLACKLIST = new Set([
     "you can","i can","you are","i am","i was","it is","there is","there are",
     "this is","that is","you should","i should","you have","i have","i will","you will",
     "i think","you know","let me","let s","i d","you d","i ll","you ll",
+    // Third-person agent-brief framing
+    "the user","user 's","the file","the same","the new","the next","the current",
+    "the way","the previous","the existing","the right","the wrong","the model",
+    "the test","the tests","the script","the data","the page","the code","the api",
+    "the agent","the assistant","the change","the changes","the fix","the issue",
+    "the bug","the feature","the request","the response","the task","the step",
+    "you should","do not","make sure","based on","such that","in order","as well",
+    "read only","run the","use the","do the","get the","add the","set the","fix the",
+    "this file","this code","this is","this should","this means","that we","that you",
+    "we need","we should","we want","we have","i want","i need","i would","i d like",
+    "for the","with the","without the","of the","to the","from the","on the","at the",
+    "in the","by the","into the","via the","across the","through the","over the","under the",
+    "as the","like the","than the","then the",
   ]);
   const bigramCounts = new Map();
   const trigramCounts = new Map();
@@ -483,6 +499,21 @@ export function aiFingerprint() {
       .join("\n");
   }
 
+  // Heuristics to keep ONLY the user's conversational voice:
+  // - Agent briefs are usually 500+ chars with markdown headers
+  //   like "# Mission", "# Task", "You are the X Agent". The user
+  //   typed them, but they're instruction-language, not natural
+  //   speech. Bias the n-gram pool toward shorter messages.
+  // - Frustration tokens still count from any length (you swear in
+  //   long messages too), so we apply the length filter ONLY to
+  //   the phrase-mining loop, not the frustration loop.
+  const AGENT_BRIEF_RE =
+    /^\s*#\s+(?:Mission|Task|Goal|Objective|Plan|Brief|Instructions?|Workflow)\b|^You are\s+(?:evaluating|reviewing|helping|assessing|analyzing|building|writing|designing|the\s|an?\s|my\s|now\s|going\s|asked|tasked|expected|required|responsible)|^Your\s+(?:job|task|goal|mission|role|responsibility)\b|^\s*##\s+(?:Cwd|What'?s already done|Mission|Out of scope)|^You will see\b|^You'?ll see\b/im;
+  // Claude Code's bracketed system markers stored as user_message
+  // when the user hits Ctrl-C or pastes from the model. Not voice.
+  const SYSTEM_MARKER_RE =
+    /^\s*\[Request interrupted by user|^\s*\[?Caveat:\s*The messages|^\s*<system-reminder>|^\s*<task-notification>|^\s*<command-name>|^\s*<command-message>|^\s*\[Image:?\s*source:|^\s*\[Image\s*\d*\s*:|^\s*\[Pasted text/i;
+
   for (const m of userMsgs) {
     const rawText = extractMessageText(m, { userOnly: true });
     if (!rawText) continue;
@@ -492,7 +523,8 @@ export function aiFingerprint() {
     // content, not your voice. Skip the entire message.
     if (
       /The following is the Codex agent history/i.test(rawText) ||
-      />>> TRANSCRIPT START/i.test(rawText)
+      />>> TRANSCRIPT START/i.test(rawText) ||
+      SYSTEM_MARKER_RE.test(rawText)
     ) continue;
     const text = stripIdeContext(rawText);
     if (!text) continue;
@@ -502,6 +534,11 @@ export function aiFingerprint() {
       const norm = x.toLowerCase().trim();
       frustrationCounts.set(norm, (frustrationCounts.get(norm) || 0) + 1);
     }
+    // Phrase mining: only on conversational messages. Skip agent
+    // briefs (long messages, role-assignment markers). Frustration
+    // already counted above regardless of length.
+    if (text.length > 500) continue;
+    if (AGENT_BRIEF_RE.test(text)) continue;
     // Phrase mining: split into words, generate 2- and 3-grams, drop
     // anything where the boundary words are both stopwords (those are
     // basically connective tissue, not your "voice").
@@ -511,6 +548,7 @@ export function aiFingerprint() {
       .replace(/`[^`]*`/g, " ")          // inline code
       .replace(/https?:\/\/\S+/g, " ")    // URLs
       .replace(/\S+\/\S+/g, " ")          // anything with a slash (paths)
+      .replace(/&[a-z]+;/g, " ")          // html entities (&gt; -> "gt")
       .replace(/[^a-z0-9\s']/g, " ")
       .split(/\s+/)
       .filter((w) => w.length >= 1 && w.length <= 20)
