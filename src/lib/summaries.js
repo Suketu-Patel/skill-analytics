@@ -17,7 +17,12 @@ import {
 } from "./sqlite.js";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
-const HAIKU_TIMEOUT_MS = 60_000;
+// 180s. Haiku does extended reasoning on the honesty rules + math
+// (measured 70-90s when grounding the comparisons). The route runs
+// async, the cost-overview view shows a "Thinking…" pill while it
+// works, and the result is cached for 24h, so a longer timeout is
+// cheap insurance against false errors.
+const HAIKU_TIMEOUT_MS = 180_000;
 const KIND = "cost_fun_facts";
 
 // ─── prompt ──────────────────────────────────────────────────────────────
@@ -37,9 +42,12 @@ const REGION_FLAVOR = {
   IN: {
     name: "India",
     currencyHint:
-      "Show dollar figures AND their approximate INR equivalent in parentheses using ~83 INR per USD, e.g. \"$500 (~₹41,500)\". Round INR to the nearest hundred or thousand.",
+      "Show dollar figures AND their approximate INR equivalent in parentheses using ~83 INR per USD, e.g. \"$500 (~₹41,500)\". Round INR to the nearest hundred, thousand, or lakh (use \"L\" for lakhs, \"Cr\" for crores).",
+    // Anchored to typical urban-India spending, not luxury. Each entry has
+    // a real price so the model can do the math without making up "a year
+    // of Mumbai 1BHK rent" when the number is 10x too high.
     metaphors:
-      "auto-rickshaw rides in Mumbai (~₹50), masala chai at a tapri (~₹15), Bengaluru metro fares (~₹25), Goa beach shacks, biryani plates from Paradise (~₹450), monthly Mumbai 1BHK rent (~₹35,000), Royal Enfield Classic 350 (~₹2.1L), Ola/Uber cab rides across Delhi, Big Basket grocery runs, IPL match tickets, weekend Goa flights from Bangalore",
+      "masala chai at a tapri (~₹15), auto rides (~₹50), Bengaluru/Delhi metro fares (~₹30), Mumbai local-train monthly pass (~₹240), Zomato dinner orders (~₹350), biryani plates (~₹450), monthly Mumbai 1BHK rent (~₹35,000), Big Basket weekly grocery (~₹2,000), iPhone 16 (~₹80,000), Royal Enfield Classic 350 (~₹2.1L), Maruti Swift on-road (~₹8L), an IPL match ticket (~₹2,500), a weekend Goa flight from Bangalore (~₹6,000), a year of Netflix (~₹6,500), a year of Amazon Prime (~₹1,500), a Bangalore software engineer's monthly salary (~₹1.2L). Don't claim something equals X months of rent or X salaries without doing the math; if you make a comparison, the rupee figure must actually divide evenly into the anchor.",
   },
   UK: {
     name: "United Kingdom",
@@ -94,35 +102,53 @@ export function buildPrompt(h, region = "US") {
   const codexSpend = Math.round(h.source_split?.codex || 0);
   const burnDay = h.most_expensive_day;
 
-  return `Generate exactly 7 fun, snarky 1-2 line "did you know?" facts about my AI coding tool usage for a user based in ${flavor.name}. Use vivid, specific ${flavor.name}-resonant comparisons that make scale tangible. Pick from things like: ${flavor.metaphors}. ${flavor.currencyHint} Vary the metaphor; never reuse one across the seven facts. Be slightly sarcastic but never mean. Each fact under 25 words.
+  return `Generate exactly 5 short "did you know?" facts about a developer's AI coding tool usage. The reader is in ${flavor.name}. Each fact must be one tight sentence, max 22 words. Dry, observational, occasionally funny. Never preachy, never hype.
 
-STRICT formatting rules:
-  - NO emoji.
-  - NO markdown.
-  - NO numbered list. Just one fact per line.
-  - NO em dashes (the long "—" character). Use commas, colons, parentheses, or periods instead. This is a hard rule; any em dash will cause the response to be rejected.
+VOICE
+  Sound like a senior engineer who notices things, not a copywriter. "$971 in one day. That's 200 Costco chickens or one airline ticket you didn't take." Drop the bow. No "you might be surprised", no "fun fact!", no "wow", no "honestly".
 
-REQUIRED coverage. Produce exactly one fact for each of these angles, in this order:
-  1. CACHE: what prompt-cache savings bought you
-  2. BURN: the worst-spend day or a spike
-  3. MODEL: Claude vs Codex split or model preference
-  4. SESSION: average-cost-per-session reality check
-  5. SCALE: total spend converted into something physical
-  6. TOKENS: context-window scale (compare millions of tokens to something concrete: novels, encyclopedias, the Library of Congress, etc.)
-  7. WILDCARD: a surprising ratio, oddity, or "you could have bought X instead" punchline drawn from any combination of the numbers
+CURRENCY
+  ${flavor.currencyHint}
 
-My usage:
+ANCHORS (use these prices; never invent new ones)
+  ${flavor.metaphors}
+
+TOKEN-SCALE ANCHORS (use these for any tokens-related fact)
+  - 1 chat message: ~200 tokens
+  - 1 typical novel: ~120,000 tokens
+  - The Lord of the Rings full trilogy: ~700,000 tokens
+  - Wikipedia (English text only): ~6 billion tokens
+  - All books published in a year worldwide (~2M books): ~250 billion tokens
+  Do NOT say "all human knowledge", "every book ever written", "all of human writing", or anything that implies infinity or totality. Stay bounded.
+
+HARD RULES (a violation gets the response rejected and re-rolled)
+  - Show the arithmetic implicitly: every "X = N anchors" claim must be within 15% when you divide. Compute before you write.
+  - Round to integers. No "1.4 iPhones", no "0.6 years". "8 phones", "5 months", "twice".
+  - One anchor per fact. Don't pile up "X iPhones or Y rotisserie chickens or Z subway swipes".
+  - No hyperbole / universals: never "infinite", "endless", "all of", "every", "the entire", "humanity", "civilization".
+  - No emoji. No markdown. No numbered list. One fact per line.
+  - No em dashes ("—"). Use commas, colons, parentheses, periods.
+  - Don't recycle anchors across the five facts.
+
+COVERAGE (one fact per angle, this order)
+  1. CACHE: what the prompt-cache savings bought you in concrete terms
+  2. BURN: the worst-spend day or a sharp spike, with one anchor
+  3. MODEL: Claude vs Codex tilt, framed as a preference, not a number dump
+  4. SCALE: total spend translated into ONE physical purchase from the anchor list
+  5. TOKENS: total billable tokens vs the token-scale anchors above, bounded
+
+USAGE NUMBERS
   - total spend: $${spend.toLocaleString()}
   - avg cost per session: $${avgSession}
   - sessions: ${sessions.toLocaleString()}
-  - tokens consumed (millions): ${tokensTotal.toLocaleString()}M total. ${tokensCached.toLocaleString()}M cached, ${tokensOutput.toLocaleString()}M output${tokensReasoning ? `, ${tokensReasoning.toLocaleString()}M reasoning` : ""}
-  - prompt cache hit rate: ${cacheHit}%
-  - saved by caching: $${saved.toLocaleString()}
-  - Claude spend: $${claudeSpend.toLocaleString()}  |  Codex spend: $${codexSpend.toLocaleString()}
-  ${burnDay ? `- worst burn day: ${burnDay.day} at $${Math.round(burnDay.cost).toLocaleString()}` : ""}
+  - tokens (millions): ${tokensTotal.toLocaleString()}M total, ${tokensCached.toLocaleString()}M cached, ${tokensOutput.toLocaleString()}M output${tokensReasoning ? `, ${tokensReasoning.toLocaleString()}M reasoning` : ""}
+  - cache hit rate: ${cacheHit}%
+  - cache savings: $${saved.toLocaleString()}
+  - Claude spend: $${claudeSpend.toLocaleString()} | Codex spend: $${codexSpend.toLocaleString()}
+  ${burnDay ? `- worst day: ${burnDay.day} at $${Math.round(burnDay.cost).toLocaleString()}` : ""}
 
-Return STRICT JSON only:
-{"facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5", "fact 6", "fact 7"]}`;
+Return STRICT JSON only, no prose:
+{"facts": ["...", "...", "...", "...", "..."]}`;
 }
 
 // ─── subprocess helper (mirrors the one in judge.js) ────────────────────
