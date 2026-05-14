@@ -61,10 +61,10 @@ type CrazyPayload = {
     peak_hour_count: number;
     top_project: string | null;
     top_project_turns: number;
-    most_loved_tool: string | null;
-    most_loved_count: number;
-    most_hated_tool: string | null;
-    most_hated_error_rate: number;
+    favorite_phrase: { phrase: string; count: number; n: number } | null;
+    favorite_phrases: { phrase: string; count: number; n: number }[];
+    most_frustrating_phrase: { phrase: string; count: number } | null;
+    frustrating_phrases: { phrase: string; count: number }[];
     avg_turns_per_session: number;
     top_correction_phrase: { phrase: string; count: number } | null;
   };
@@ -146,17 +146,6 @@ function FingerprintCard({ fp }: { fp: CrazyPayload["fingerprint"] }) {
           mono
         />
         <FpStat
-          label="Favorite tool"
-          value={fp.most_loved_tool || "—"}
-          sub={`${fp.most_loved_count.toLocaleString()} calls`}
-        />
-        <FpStat
-          label="Buggiest tool"
-          value={fp.most_hated_tool || "—"}
-          sub={`${(fp.most_hated_error_rate * 100).toFixed(1)}% errors`}
-          tone="coral"
-        />
-        <FpStat
           label="Most-worked project"
           value={projShort}
           sub={`${fp.top_project_turns} turns`}
@@ -167,17 +156,64 @@ function FingerprintCard({ fp }: { fp: CrazyPayload["fingerprint"] }) {
           value={fp.avg_turns_per_session.toString()}
           sub="across all sources"
         />
-        <FpStat
-          label="Your top correction"
-          value={fp.top_correction_phrase ? `"${fp.top_correction_phrase.phrase}"` : "—"}
-          sub={
-            fp.top_correction_phrase
-              ? `said ${fp.top_correction_phrase.count.toLocaleString()}x`
-              : ""
-          }
-        />
-        <FpStat label="Models used" value={`${fp.top_models.length}`} sub="distinct in lifetime" />
       </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <PhraseList
+          label="Favorite phrases"
+          tone="default"
+          items={fp.favorite_phrases.map((p) => ({ text: p.phrase, count: p.count }))}
+          emptyText="not enough signal yet"
+        />
+        <PhraseList
+          label="Most frustrating phrases"
+          tone="coral"
+          items={fp.frustrating_phrases.map((p) => ({ text: p.phrase, count: p.count }))}
+          emptyText="zero frustration detected (suspicious)"
+        />
+      </div>
+    </div>
+  );
+}
+
+function PhraseList({
+  label,
+  items,
+  tone = "default",
+  emptyText,
+}: {
+  label: string;
+  items: { text: string; count: number }[];
+  tone?: "default" | "coral";
+  emptyText: string;
+}) {
+  const accent = tone === "coral" ? "text-coral" : "text-ink";
+  return (
+    <div className="rounded-md bg-white/60 p-3 dark:bg-slate-900/40">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        {label}
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs italic text-slate-500">{emptyText}</p>
+      ) : (
+        <ol className="flex flex-col gap-1">
+          {items.map((it, i) => (
+            <li
+              key={`${it.text}-${i}`}
+              className="flex items-baseline justify-between gap-2 text-xs"
+            >
+              <span className="flex items-baseline gap-1.5 truncate">
+                <span className="text-[10px] tabular-nums text-slate-400">{i + 1}.</span>
+                <span className={`truncate font-mono font-semibold ${accent}`}>
+                  &ldquo;{it.text}&rdquo;
+                </span>
+              </span>
+              <span className="shrink-0 tabular-nums text-slate-500">
+                {it.count.toLocaleString()}x
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

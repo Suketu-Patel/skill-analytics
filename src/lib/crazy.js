@@ -30,14 +30,22 @@ function parseRaw(json) {
 
 // Pulls the textual body out of a raw_events row, regardless of which
 // JSONL flavor (Codex's nested payload, Claude's message.content array).
-function extractMessageText(row) {
+// `userOnly` mode rejects tool_result wrappers Claude stores with
+// type=user but which are actually the model receiving tool output,
+// not the human typing.
+function extractMessageText(row, opts = {}) {
   const j = parseRaw(row.raw_json);
   if (!j) return "";
   // Codex shape: {type: "event_msg", payload: {type: "user_message", message: "..."}}
   if (j.payload?.message && typeof j.payload.message === "string") return j.payload.message;
   // Claude shape: {message: {content: [{type: "text", text: "..."}]}}
   if (Array.isArray(j.message?.content)) {
-    return j.message.content
+    const items = j.message.content;
+    // Claude tool_result wrapper: pseudo-user message whose content
+    // is the tool output. Not user voice; skip when caller asks for
+    // userOnly. We detect by presence of any tool_result child.
+    if (opts.userOnly && items.some((p) => p?.type === "tool_result")) return "";
+    return items
       .filter((p) => p?.type === "text" && typeof p.text === "string")
       .map((p) => p.text)
       .join("\n");
@@ -407,46 +415,162 @@ export function aiFingerprint() {
     ORDER BY n DESC
     LIMIT 1
   `);
-  const mostLovedTool = queryRows(`
-    SELECT tool_name, COUNT(*) AS n
-    FROM tool_events
-    WHERE tool_name IS NOT NULL
-    GROUP BY tool_name
-    ORDER BY n DESC
-    LIMIT 1
-  `);
-  const mostHatedTool = queryRows(`
-    SELECT tool_name,
-           SUM(CASE WHEN exit_code IS NOT NULL AND exit_code <> 0 THEN 1 ELSE 0 END) AS errs,
-           COUNT(*) AS total
-    FROM tool_events
-    WHERE tool_name IS NOT NULL
-    GROUP BY tool_name
-    HAVING total >= 50
-    ORDER BY (CAST(errs AS REAL) / total) DESC
-    LIMIT 1
-  `);
   const sessionStats = queryRows(`
     SELECT AVG(c) AS avg_turns
     FROM (SELECT COUNT(*) AS c FROM turns WHERE session_id IS NOT NULL GROUP BY session_id)
   `);
-  // Top correction phrase the user types most.
+
+  // Scan user messages for: (a) most common short phrase you actually
+  // say (bigrams + trigrams across all your prompts, minus stopwords);
+  // (b) most common frustration token. Tool name stats were boring
+  // because everyone's #1 is exec_command/Bash. Phrase stats are not.
   const userMsgs = queryRows(`
     SELECT raw_json FROM raw_events
     WHERE payload_type IN ('user_message', 'user') OR event_type = 'user'
-    LIMIT 5000
+    LIMIT 10000
   `);
-  const phraseCounts = new Map();
+  // Stopwords + ultra-short noise. Keep "you", "i", "can" as parts of
+  // bigrams; we strip them only when they form the whole bigram.
+  const STOP = new Set([
+    "the","a","an","of","to","in","on","at","by","for","with","from","is","are","was","were",
+    "be","been","being","do","does","did","this","that","these","those","it","its","as","if",
+    "or","and","but","not","no","yes","so","just","very","too","also","then","than","there",
+    "here","what","when","where","why","how","who","whom","which","my","me","mine","you","your",
+    "yours","i","im","we","us","our","ours","he","him","his","she","her","hers","they","them",
+    "their","theirs","com","de","la","el","et","un","une",
+  ]);
+  // Common short-phrase noise that drowns out the actual signal.
+  const PHRASE_BLACKLIST = new Set([
+    "you can","i can","you are","i am","i was","it is","there is","there are",
+    "this is","that is","you should","i should","you have","i have","i will","you will",
+    "i think","you know","let me","let s","i d","you d","i ll","you ll",
+  ]);
+  const bigramCounts = new Map();
+  const trigramCounts = new Map();
+  const frustrationCounts = new Map();
+  // Codex prepends IDE context to every user_message: a markdown block
+  // ("# Context from my IDE setup", "## Active file:", "## Open tabs",
+  // file path listings). That stuff isn't user voice. Strip it out
+  // before n-gramming, otherwise the top phrase is just file path
+  // components from your project tree.
+  function stripIdeContext(text) {
+    // Codex pattern: when the message starts with auto-injected
+    // context blocks ("# Context from my IDE setup", "# In app
+    // browser", "## Active file:"), the real ask lives after
+    // "## My request for Codex:". Take only that tail.
+    const codexMarker = text.indexOf("## My request");
+    if (codexMarker >= 0) {
+      const after = text.slice(codexMarker).replace(/^##\s+My request[^\n]*\n+/, "");
+      return after;
+    }
+    // If we see context markers but no "## My request" tail, the
+    // entire message is context — drop it. Counting bullets like
+    // "- The user has the in-app browser open" as user voice would
+    // poison the top-phrase signal.
+    if (/^\s*#\s+(?:Context from|In app browser|Active file)/im.test(text)) return "";
+    // Otherwise drop lines that look like context: paths, headers,
+    // "filename.ext: path" tab listings.
+    return text
+      .split("\n")
+      .filter((line) => {
+        const t = line.trim();
+        if (!t) return true;
+        if (/^#{1,6}\s/.test(t)) return false;            // markdown headers
+        if (/^[-*]\s+\S+\.\w+:\s+\S+/.test(t)) return false;  // "- file.ts: src/x.ts" tab listing
+        if (/^\/Users\//.test(t) || /^\/home\//.test(t)) return false; // bare path
+        return true;
+      })
+      .join("\n");
+  }
+
   for (const m of userMsgs) {
-    const text = extractMessageText(m);
+    const rawText = extractMessageText(m, { userOnly: true });
+    if (!rawText) continue;
+    // Codex auto-review wraps the whole previous transcript inside a
+    // user_message ("The following is the Codex agent history...
+    // >>> TRANSCRIPT START"). That's machine-generated meta-prompt
+    // content, not your voice. Skip the entire message.
+    if (
+      /The following is the Codex agent history/i.test(rawText) ||
+      />>> TRANSCRIPT START/i.test(rawText)
+    ) continue;
+    const text = stripIdeContext(rawText);
     if (!text) continue;
-    const matches = text.match(new RegExp(CORRECTION_RE.source, "gi"));
-    if (matches) for (const x of matches) {
+    // Frustration: keep counting individual matches by lemma.
+    const frust = text.match(new RegExp(CORRECTION_RE.source, "gi"));
+    if (frust) for (const x of frust) {
       const norm = x.toLowerCase().trim();
-      phraseCounts.set(norm, (phraseCounts.get(norm) || 0) + 1);
+      frustrationCounts.set(norm, (frustrationCounts.get(norm) || 0) + 1);
+    }
+    // Phrase mining: split into words, generate 2- and 3-grams, drop
+    // anything where the boundary words are both stopwords (those are
+    // basically connective tissue, not your "voice").
+    const words = text
+      .toLowerCase()
+      .replace(/```[\s\S]*?```/g, " ")  // strip code blocks (massive false-positive source)
+      .replace(/`[^`]*`/g, " ")          // inline code
+      .replace(/https?:\/\/\S+/g, " ")    // URLs
+      .replace(/\S+\/\S+/g, " ")          // anything with a slash (paths)
+      .replace(/[^a-z0-9\s']/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 1 && w.length <= 20)
+      // Drop pure-numeric tokens and hex-ish tokens (git hashes,
+      // commit refs leak through as "index 6aeyk..."). Threshold:
+      // mixed alphanumeric of length >=6 with >=2 digits = probably
+      // a hash. Real english words almost never look like that.
+      .filter((w) => {
+        if (/^\d+$/.test(w)) return false;
+        // Any mixed alphanumeric of length >= 6 is overwhelmingly
+        // a hash, commit ref, build id, or session id. Real english
+        // tokens that mix letters and digits at that length (ipv6,
+        // utf8, sha256) are rare and not phrase-y anyway.
+        if (w.length >= 6 && /\d/.test(w) && /[a-z]/.test(w)) return false;
+        return true;
+      });
+    for (let i = 0; i + 1 < words.length; i++) {
+      const a = words[i], b = words[i + 1];
+      // Both stop -> connective tissue. One stop is fine ("the file").
+      if (STOP.has(a) && STOP.has(b)) continue;
+      // Single-letter tokens or numbers are noise.
+      if (a.length < 2 || b.length < 2) continue;
+      const key = `${a} ${b}`;
+      if (PHRASE_BLACKLIST.has(key)) continue;
+      bigramCounts.set(key, (bigramCounts.get(key) || 0) + 1);
+      if (i + 2 < words.length) {
+        const c = words[i + 2];
+        if (c.length >= 2) {
+          // Trigram: skip if every word is a stopword.
+          if (STOP.has(a) && STOP.has(b) && STOP.has(c)) continue;
+          const k3 = `${a} ${b} ${c}`;
+          trigramCounts.set(k3, (trigramCounts.get(k3) || 0) + 1);
+        }
+      }
     }
   }
-  const topCorrection = [...phraseCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  // Top-N for both bigrams and trigrams. Trigrams read better as
+  // "phrases" (more specific) so we lean on them when they have
+  // comparable volume. Surface a top-5 list, not just the single
+  // winner, so the texture comes through.
+  const sortedBigrams = [...bigramCounts.entries()].sort((a, b) => b[1] - a[1]);
+  const sortedTrigrams = [...trigramCounts.entries()].sort((a, b) => b[1] - a[1]);
+  // Merge: trigrams whose count is at least 0.5x top bigram are
+  // promoted into the favorite list; otherwise bigrams dominate.
+  const topBigramCount = sortedBigrams[0]?.[1] || 0;
+  const merged = [
+    ...sortedTrigrams
+      .filter(([, c]) => c >= topBigramCount * 0.5)
+      .map(([phrase, count]) => ({ phrase, count, n: 3 })),
+    ...sortedBigrams.map(([phrase, count]) => ({ phrase, count, n: 2 })),
+  ]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+  const favoritePhrase = merged[0] || null;
+
+  const sortedFrustration = [...frustrationCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([phrase, count]) => ({ phrase, count }));
+  const topFrustration = sortedFrustration[0] || null;
 
   return {
     top_models: topModel.map((r) => ({ model: r.model, count: Number(r.n) })),
@@ -454,17 +578,13 @@ export function aiFingerprint() {
     peak_hour_count: peakHour[0] ? Number(peakHour[0].n) : 0,
     top_project: topProject[0]?.cwd || null,
     top_project_turns: topProject[0] ? Number(topProject[0].n) : 0,
-    most_loved_tool: mostLovedTool[0]?.tool_name || null,
-    most_loved_count: mostLovedTool[0] ? Number(mostLovedTool[0].n) : 0,
-    most_hated_tool: mostHatedTool[0]?.tool_name || null,
-    most_hated_error_rate: mostHatedTool[0]
-      ? Number(mostHatedTool[0].errs) / Number(mostHatedTool[0].total)
-      : 0,
+    favorite_phrase: favoritePhrase,
+    favorite_phrases: merged,
+    most_frustrating_phrase: topFrustration,
+    frustrating_phrases: sortedFrustration,
     avg_turns_per_session: sessionStats[0]?.avg_turns
       ? Math.round(Number(sessionStats[0].avg_turns) * 10) / 10
       : 0,
-    top_correction_phrase: topCorrection
-      ? { phrase: topCorrection[0], count: topCorrection[1] }
-      : null,
+    top_correction_phrase: topFrustration,
   };
 }
