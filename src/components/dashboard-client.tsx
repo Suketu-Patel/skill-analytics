@@ -935,7 +935,7 @@ export default function DashboardClient() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, importing, projectScope, evidence, skillDetailName, visibleTabs]);
+  }, [active, importing, projectScope, evidence, skillDetailName, visibleTabs, sourceFilter]);
 
   // Auto-sync at the user-configured cadence while the tab is open.
   // Skip if a manual import is already in flight (avoids overlapping
