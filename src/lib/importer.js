@@ -833,6 +833,17 @@ export function importAll(options = {}) {
       console.error("wrapped snapshot cache failed:", err?.message || err);
     });
 
+  // Crazy snapshot — the eight analytics panels do real work (scan
+  // 24K user messages, walk repos for cost-per-LOC, run regex over
+  // every body), so cold compute is 600ms-2s. Pre-warm after every
+  // sync, just like Wrapped. Same swallow-error pattern.
+  import("./crazy-cache.js")
+    .then((m) => m.precomputeCrazySnapshot())
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("crazy snapshot cache failed:", err?.message || err);
+    });
+
   // Contributors cache — pre-warm so the About modal opens instantly
   // rather than waiting for `gh pr list` on every click. Same dynamic-
   // import + swallow-error pattern: the modal still works (degraded)
