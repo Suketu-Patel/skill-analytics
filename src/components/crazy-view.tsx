@@ -22,6 +22,7 @@ import {
   DollarSign,
   Fingerprint,
   Ghost,
+  Info,
   MessageCircle,
   Quote,
   Repeat,
@@ -183,6 +184,7 @@ function FingerprintCard({
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-violet">
         <Fingerprint size={14} />
         Your fingerprint
+        <InfoTip text="Each tile aggregates one column from your imported sessions: Peak hour = hour-of-day with most session starts. Top model = most-used model in your turns. Skills you made = on-disk skills/agents in ~/.claude or ~/.codex (excluding gstack/, plugins/, .system/). Avg turns/session = average turn count across all sessions. Phrase lists at the bottom mine bigrams/trigrams from your short conversational messages, after stripping system markers and learning per-user noise words." />
       </h2>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <FpStat label="Peak hour" value={peak} sub={`${fp.peak_hour_count} sessions`} />
@@ -318,18 +320,62 @@ function PhraseList({
 
 // ─── shared panel chrome ───────────────────────────────────────────────
 
+// Small "i" button that toggles a popover with the metric's
+// calculation method. Plain language, short, no jargon. Click anywhere
+// outside the popover to dismiss; Esc-handler at parent level closes
+// modals + scopes so we don't fight with that here.
+function InfoTip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title="How this is calculated"
+        aria-label="How this is calculated"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-line text-slate-500 hover:border-teal hover:text-ink"
+      >
+        <Info size={11} />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default bg-transparent"
+          />
+          <div
+            className="absolute left-0 top-7 z-50 w-72 rounded-md border border-line bg-white p-3 text-[11px] leading-snug text-slate-600 shadow-lg dark:bg-slate-900 dark:text-slate-300"
+          >
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
+              How this is calculated
+            </div>
+            {text}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 function PanelHeader({
   Icon,
   title,
   takeaway,
   right,
   tone = "default",
+  info,
 }: {
   Icon: typeof Brain;
   title: string;
   takeaway?: string | null;
   right?: React.ReactNode;
   tone?: "default" | "coral" | "violet";
+  info?: string;
 }) {
   const accent =
     tone === "coral" ? "text-coral" : tone === "violet" ? "text-violet" : "text-slate-500";
@@ -339,6 +385,7 @@ function PanelHeader({
         <h2 className={`flex items-center gap-1.5 text-sm font-semibold text-ink`}>
           <Icon size={14} className={accent} />
           {title}
+          {info && <InfoTip text={info} />}
         </h2>
         {right && <span className="text-xs text-slate-500">{right}</span>}
       </div>
@@ -390,6 +437,7 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
         takeaway={data.takeaway}
         tone={tone}
         right={`peak ${worst?.band ?? "—"} at ${Math.round((worst?.rate || 0) * 100)}%`}
+        info="For every turn in a session, we add up tokens consumed so far. Then we check if you sent a 'no', 'wrong', 'actually', 'fix this', or similar message within 5 minutes after. We bucket turns by total tokens at that point and compute the correction rate per bucket. Rising line = longer sessions hurt your trust in the model."
       />
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={chart} margin={{ top: 10, right: 18, left: 0, bottom: 0 }}>
@@ -432,6 +480,7 @@ function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
         title="When you push back hardest"
         takeaway={data.takeaway}
         right={`${overall.toFixed(1)}% baseline · ${data.total_frustrated.toLocaleString()} corrections in ${data.total_messages.toLocaleString()} msgs`}
+        info="We scan every user message for pushback words: 'no', 'wrong', 'actually', 'stop', 'undo', plus profanity ('fuck', 'wtf', 'ugh', etc.). Each message gets bucketed by the hour-of-day it was sent. Bar height = corrections divided by total messages that hour. The dashed baseline = your overall correction rate across all hours."
       />
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={chart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -471,6 +520,7 @@ function PepTalkPanel({ data }: { data: CrazyPayload["pep_talk"] }) {
         takeaway={data.takeaway}
         tone={sycoBad ? "coral" : "default"}
         right={`${(data.rate * 100).toFixed(1)}% pep-talk · ${(data.sycophancy_rate * 100).toFixed(0)}% then corrected`}
+        info="We scan assistant messages for confidence-but-empty phrases: 'perfect', 'great question', 'exactly', 'I see what's happening', 'happy to', etc. Pep-talk rate = pep-talked messages divided by total assistant messages. Sycophancy rate = of those pep-talked turns, how many were followed by a user correction within 5 minutes. High = the model performs competence rather than delivering it."
       />
       <ul className="flex flex-col gap-1">
         {data.top_phrases.map((p) => (
@@ -498,6 +548,7 @@ function ToolTransitions({ data }: { data: CrazyPayload["tool_transitions"] }) {
         Icon={Repeat}
         title="Your AI workflow shape"
         takeaway={"A→A pairs are iteration on one op; A→B pairs show real workflows. Both shapes show up here."}
+        info="For every tool call your AI made, we look at what tool ran next in the same turn (Edit, Read, Bash, etc.). Each pair like 'Read → Edit' gets a count. Amber arrows = same-tool iteration (you're poking at one thing). Teal arrows = cross-tool moves (real workflows like Read then Edit then Bash)."
       />
       <ul className="flex flex-col gap-1.5">
         {data.slice(0, 12).map((t) => (
@@ -542,6 +593,7 @@ function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
             ? `Most expensive line you kept: $${(worst.cost_per_loc || 0).toFixed(3)} in ${worst.cwd_short}. Rough math, ignores deleted lines.`
             : null
         }
+        info="For each repo (cwd) where you ran AI sessions, we sum up the billable tokens and approximate the dollar cost. Then we walk the repo on disk and count current source-code lines (.ts, .py, .go, etc., skipping node_modules + .git). Cost ÷ LOC = the approximate price tag on each line still living in your codebase. Imperfect: it includes time you spent thinking, debugging, exploring, and doesn't track AI-vs-human authorship line-by-line."
       />
       <table className="w-full text-xs">
         <thead>
@@ -597,6 +649,7 @@ function PhantomEdits({ data }: { data: CrazyPayload["phantom_edits"] }) {
             ? `${data.length} file${data.length === 1 ? "" : "s"} the AI edited that no longer exist on disk. Renamed, deleted, or hallucinated.`
             : "Either your AIs are tidy or every edit landed somewhere real."
         }
+        info="From every Edit / Write / apply_patch / MultiEdit tool call your AI made, we extract the file path. Then we run fs.existsSync() against your actual disk today. Files that no longer exist appear here, sorted by edit count. Could mean: file was renamed (no link tracking), deleted later, or the AI hallucinated a path that never landed."
       />
       {data.length === 0 ? null : (
         <ul className="max-h-72 overflow-y-auto text-xs">
