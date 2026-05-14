@@ -22,6 +22,7 @@ import {
   EyeOff,
   Eye,
   Flame,
+  Hammer,
   Moon,
   RefreshCw,
   Search,
@@ -314,14 +315,15 @@ function StatCard({
   value: string;
   detail: string;
   icon: typeof Activity;
-  tone?: "teal" | "coral" | "amber" | "violet";
+  tone?: "teal" | "coral" | "amber" | "violet" | "emerald";
   loading?: boolean;
 }) {
   const toneClass = {
     teal: "bg-teal/10 text-teal",
     coral: "bg-coral/10 text-coral",
     amber: "bg-amber/10 text-amber",
-    violet: "bg-violet/10 text-violet"
+    violet: "bg-violet/10 text-violet",
+    emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
   }[tone];
   return (
     <div className="metric-card p-4">
@@ -917,6 +919,11 @@ export default function DashboardClient() {
         if (projectScope) {
           e.preventDefault();
           setProjectScope(null);
+          return;
+        }
+        if (sourceFilter !== "all") {
+          e.preventDefault();
+          setSourceFilter("all");
           return;
         }
       }
@@ -1521,6 +1528,55 @@ export default function DashboardClient() {
         </div>
       )}
 
+      {/* Source-filter banner. Same shape as the project-scope banner.
+          Picks the source's brand color so the strip is unmistakeable
+          (Codex black, Claude coral, Cursor blue). Hidden when "all". */}
+      {sourceFilter !== "all" && (
+        <div
+          className={`flex items-center justify-between gap-3 rounded-lg border-2 px-4 py-2.5 ${
+            sourceFilter === "claude"
+              ? "border-claude bg-claude/10"
+              : sourceFilter === "cursor"
+                ? "border-cursor bg-cursor/10"
+                : "border-codex bg-codex/10"
+          }`}
+        >
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span
+              className={`text-xs font-semibold uppercase tracking-wider ${
+                sourceFilter === "claude"
+                  ? "text-claude"
+                  : sourceFilter === "cursor"
+                    ? "text-cursor"
+                    : "text-codex"
+              }`}
+            >
+              Source filter
+            </span>
+            <span className="truncate text-sm font-semibold text-ink">
+              {SOURCE_LABEL[sourceFilter]}
+            </span>
+            <span className="hidden text-xs text-slate-500 sm:inline">
+              · only sessions tagged {SOURCE_LABEL[sourceFilter].toLowerCase()} are counted
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSourceFilter("all")}
+            title="Show all sources"
+            className={`shrink-0 rounded-md border bg-white px-2.5 py-1 text-xs font-medium hover:text-white ${
+              sourceFilter === "claude"
+                ? "border-claude text-claude hover:bg-claude"
+                : sourceFilter === "cursor"
+                  ? "border-cursor text-cursor hover:bg-cursor"
+                  : "border-codex text-codex hover:bg-codex"
+            }`}
+          >
+            ✕ Clear
+          </button>
+        </div>
+      )}
+
       {/* Global date-range bar. Centralized here so every tab — Cost,
           Wrapped, Comparison, Timeline, Skills — picks up the same
           ?from/?to via filterQS. Used to live inside the Skills FilterBar,
@@ -1586,13 +1642,32 @@ export default function DashboardClient() {
           the first thing a user saw on Cost / Wrapped / Comparison etc.
           The cost pivot moved that real estate to cost headlines. */}
       {active === "skills" && (
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
           label="Active Skills"
           value={`${formatNumber(totals.active_skills)} / ${formatNumber(totals.skills)}`}
           detail={`${activeSkillRate}% of known skills seen in sessions`}
           icon={Activity}
           tone="teal"
+          loading={loading && !overview.totals}
+        />
+        <StatCard
+          label="You Made"
+          value={formatNumber(Number(totals.user_skills || 0))}
+          detail={(() => {
+            const bySrc = (totals as Record<string, unknown>).user_skills_by_source as
+              | { claude?: number; codex?: number }
+              | undefined;
+            const claude = Number(bySrc?.claude || 0);
+            const codex = Number(bySrc?.codex || 0);
+            if (!claude && !codex) return "Skills and agents you authored";
+            const parts: string[] = [];
+            if (claude) parts.push(`${claude} Claude`);
+            if (codex) parts.push(`${codex} Codex`);
+            return parts.join(" · ");
+          })()}
+          icon={Hammer}
+          tone="emerald"
           loading={loading && !overview.totals}
         />
         <StatCard

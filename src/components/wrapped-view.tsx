@@ -46,6 +46,12 @@ type CostPayload = {
 
 type FunFacts = { ok: boolean; facts?: string[] };
 
+type UserSkills = {
+  ok?: boolean;
+  total: number;
+  by_source?: { claude?: number; codex?: number };
+};
+
 // ─── formatters ─────────────────────────────────────────────────────────
 
 const num = (n: number) => n.toLocaleString();
@@ -98,6 +104,7 @@ export default function WrappedView({
 }) {
   const [cost, setCost] = useState<CostPayload | null>(null);
   const [comparison, setComparison] = useState<CompareData | null>(null);
+  const [userSkills, setUserSkills] = useState<UserSkills | null>(null);
   const [funFacts, setFunFacts] = useState<FunFacts | null>(null);
   const [loading, setLoading] = useState(true);
   const [anonymize, setAnonymize] = useState(true);
@@ -110,7 +117,15 @@ export default function WrappedView({
       ? Promise.all([
           fetch(`/api/metrics/cost-overview${qs}`).then((r) => r.json()),
           fetch(`/api/metrics/comparison${qs}`).then((r) => r.json()),
-        ]).then(([c, cmp]) => ({ ok: true, cost_overview: c, comparison: cmp }))
+          // user_skills is lifetime-only (not date-filtered) so we always
+          // read it from the cached Wrapped snapshot, even with a brush.
+          fetch(`/api/metrics/wrapped`).then((r) => r.json()),
+        ]).then(([c, cmp, w]) => ({
+          ok: true,
+          cost_overview: c,
+          comparison: cmp,
+          user_skills: w?.user_skills,
+        }))
       : fetch(`/api/metrics/wrapped`).then((r) => r.json());
 
     Promise.all([
@@ -132,6 +147,7 @@ export default function WrappedView({
           const co = snap.cost_overview;
           if (co?.headline) setCost(co);
           setComparison(snap.comparison || null);
+          setUserSkills(snap.user_skills || null);
         }
         setFunFacts(fun);
       })
@@ -264,10 +280,23 @@ export default function WrappedView({
           </h2>
           <span className="text-xs text-slate-400">Cost + tokens combined across sources</span>
         </div>
-        <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-5">
           <BigStat label="Total spend" value={usd(h.spend_total)} />
           <BigStat label="Sessions" value={num(h.sessions_total)} />
           <BigStat label="Billable tokens" value={num(h.tokens_billable)} muted />
+          <BigStat
+            label="Skills you made"
+            value={num(userSkills?.total ?? 0)}
+            sub={(() => {
+              const claude = userSkills?.by_source?.claude || 0;
+              const codex = userSkills?.by_source?.codex || 0;
+              if (!claude && !codex) return "across Claude + Codex";
+              const parts: string[] = [];
+              if (claude) parts.push(`${claude} Claude`);
+              if (codex) parts.push(`${codex} Codex`);
+              return parts.join(" · ");
+            })()}
+          />
           <BigStat
             label="Avg / session"
             value={`$${h.avg_session_cost.toFixed(3)}`}
@@ -428,10 +457,12 @@ function BigStat({
   label,
   value,
   muted = false,
+  sub,
 }: {
   label: string;
   value: string;
   muted?: boolean;
+  sub?: string;
 }) {
   return (
     <div>
@@ -444,6 +475,7 @@ function BigStat({
         }`}
       >
         {value}
+        {sub && <span className="ml-1 text-[10px] font-medium text-slate-400">{sub}</span>}
       </div>
     </div>
   );

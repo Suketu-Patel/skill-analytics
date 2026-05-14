@@ -6,7 +6,11 @@
 // SQLite, and serve from cache on read. The Wrapped tab becomes instant.
 
 import { SqlBatch, initDb, queryRows, sha256, sqlString } from "./sqlite.js";
-import { getComparisonMetrics, getCostOverview } from "./metrics.js";
+import {
+  getComparisonMetrics,
+  getCostOverview,
+  getUserSkillCounts,
+} from "./metrics.js";
 
 const KIND = "wrapped_snapshot";
 // One canonical row keyed "latest" — we only care about the most recent
@@ -36,10 +40,12 @@ export function precomputeWrappedSnapshot() {
   // when the snapshot is fresh.
   const cost = getCostOverview({});
   const comparison = getComparisonMetrics({});
+  const userSkills = getUserSkillCounts({});
   const payload = {
     generated_at: nowIso(),
     cost_overview: { ok: true, ...cost },
     comparison: { ok: true, ...comparison },
+    user_skills: { ok: true, ...userSkills },
   };
   const batch = new SqlBatch();
   batch.add(

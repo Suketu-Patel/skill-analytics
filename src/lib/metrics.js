@@ -143,7 +143,47 @@ export function getOverviewMetrics(opts = {}) {
   // Doing this in JS after the totals query keeps the SQL portable and
   // guarantees the same normalizer everywhere.
   totals.total_tokens = billableTokensTotal(opts);
+  const userSkills = getUserSkillCounts(opts);
+  totals.user_skills = userSkills.total;
+  totals.user_skills_by_source = userSkills.by_source;
   return { totals, confidence, topSkills, topErrors, recentErrors };
+}
+
+/**
+ * Count skills the user wrote themselves vs ones that came from vendor
+ * bundles (Codex plugin cache, gstack, .system installers, plus the
+ * built-in Claude agents that arrive with no on-disk path).
+ *
+ * Heuristic: must have a real path; exclude anything under /.system/,
+ * /plugins/, or /gstack/. That maps to per-project .codex/agents/ files
+ * and user-installed skills under ~/.codex/skills/ or ~/.claude/skills/.
+ * The numbers are approximate — there's no metadata flag for authorship.
+ */
+export function getUserSkillCounts(opts = {}) {
+  const sourceFilter =
+    opts?.source && opts.source !== "all"
+      ? ` AND source = ${sqlString(opts.source)}`
+      : "";
+  const rows = queryRows(`
+    SELECT source, COUNT(*) AS n
+    FROM skills
+    WHERE kind IN ('skill','agent','claude_skill','claude_agent')
+      AND path IS NOT NULL
+      AND path != ''
+      AND path NOT LIKE '%/.system/%'
+      AND path NOT LIKE '%/plugins/%'
+      AND path NOT LIKE '%/gstack/%'
+      ${sourceFilter}
+    GROUP BY source
+  `);
+  const by_source = { claude: 0, codex: 0 };
+  let total = 0;
+  for (const r of rows) {
+    const n = Number(r.n) || 0;
+    if (r.source === "claude" || r.source === "codex") by_source[r.source] = n;
+    total += n;
+  }
+  return { total, by_source };
 }
 
 /**
