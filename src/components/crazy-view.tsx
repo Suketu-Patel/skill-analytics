@@ -22,6 +22,7 @@ import {
   DollarSign,
   Fingerprint,
   Ghost,
+  Flame,
   Info,
   MessageCircle,
   Moon,
@@ -48,6 +49,17 @@ type CrazyPayload = {
     takeaway: string | null;
     day_avg: { frustration: number; fail: number };
     night_avg: { frustration: number; fail: number };
+  };
+  swear_o_meter: {
+    tiers: {
+      tier: "mild" | "medium" | "strong";
+      label: string;
+      color: "amber" | "coral" | "rose";
+      count: number;
+      words: { word: string; count: number }[];
+    }[];
+    total: number;
+    takeaway: string | null;
   };
   cost_per_loc: {
     cwd: string;
@@ -129,6 +141,8 @@ export default function CrazyView({ refreshNonce = 0 }: { refreshNonce?: number 
       <FrustrationCurve data={data.frustration} />
 
       <DayNightCurve data={data.day_night} />
+
+      <SwearOMeter data={data.swear_o_meter} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <PepTalkPanel data={data.pep_talk} />
@@ -554,6 +568,66 @@ function DayNightCurve({ data }: { data: CrazyPayload["day_night"] }) {
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-2 w-3 rounded-sm bg-teal" /> tool-failure rate
         </span>
+      </div>
+    </Panel>
+  );
+}
+
+// ─── Swear-o-meter ─────────────────────────────────────────────────────
+
+function SwearOMeter({ data }: { data: CrazyPayload["swear_o_meter"] }) {
+  const max = Math.max(1, ...data.tiers.map((t) => t.count));
+  const colorClass = (c: "amber" | "coral" | "rose") =>
+    c === "amber"
+      ? { bar: "bg-amber", text: "text-amber", soft: "bg-amber/10 border-amber/30" }
+      : c === "coral"
+        ? { bar: "bg-coral", text: "text-coral", soft: "bg-coral/10 border-coral/30" }
+        : { bar: "bg-rose-500", text: "text-rose-500", soft: "bg-rose-500/10 border-rose-500/30" };
+  return (
+    <Panel>
+      <PanelHeader
+        Icon={Flame}
+        title="Swear-o-meter"
+        takeaway={data.takeaway}
+        right={`${data.total.toLocaleString()} total hits`}
+        info="We scan every user message for profanity and frustration lemmas, grouped by tier. Mild grumble = 'ugh', 'jesus', 'come on'. Real complaint = 'wtf', 'crap', 'bullshit'. Full f-bomb = 'fuck', 'shit'. Skips machine-generated wrappers (system reminders, image markers, transcripts) so only your typed swearing counts."
+      />
+      <div className="flex flex-col gap-3">
+        {data.tiers.map((t) => {
+          const c = colorClass(t.color);
+          const width = (t.count / max) * 100;
+          return (
+            <div key={t.tier} className={`rounded-md border p-3 ${c.soft}`}>
+              <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                <span className={`text-xs font-semibold uppercase tracking-wider ${c.text}`}>
+                  {t.label}
+                </span>
+                <span className="text-xs tabular-nums text-slate-500">
+                  {t.count.toLocaleString()} hits
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/60 dark:bg-slate-800">
+                <div
+                  className={`h-full rounded-full ${c.bar} transition-all`}
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+              {t.words.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                  {t.words.map((w) => (
+                    <span
+                      key={w.word}
+                      className="inline-flex items-baseline gap-1 rounded-md border border-line bg-white px-2 py-0.5 font-mono dark:bg-slate-900"
+                    >
+                      <span className={c.text}>&ldquo;{w.word}&rdquo;</span>
+                      <span className="tabular-nums text-slate-500">×{w.count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </Panel>
   );

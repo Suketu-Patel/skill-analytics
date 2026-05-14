@@ -20,6 +20,7 @@ import {
   pepTalkIndex,
   aiFingerprint,
   dayNightCurve,
+  swearOMeter,
   heroVerdict,
   learnNoisePhrases,
 } from "./crazy.js";
@@ -72,6 +73,7 @@ export function precomputeCrazySnapshot() {
     verdict,
     frustration,
     day_night: dayNightCurve(),
+    swear_o_meter: swearOMeter(),
     cost_per_loc: costPerLOCKept(),
     context_degradation: contextDegradation,
     phantom_edits: phantomEdits(),
