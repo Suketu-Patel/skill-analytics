@@ -106,6 +106,71 @@ function importComposers(db, batch, dbPath) {
   return composers.length;
 }
 
+// Stable id for a raw_events row so re-imports stay idempotent.
+function bubbleEventId(composerId, bubbleId) {
+  return sha256(`cursor:bubble:${composerId}:${bubbleId}`);
+}
+
+/**
+ * Pull every user-typed chat bubble out of Cursor's per-composer
+ * conversation log and write it into `raw_events` so the Crazy
+ * panels (frustration, pep-talk, phrase mining, learned noise)
+ * see Cursor's contribution alongside Codex + Claude.
+ *
+ * Cursor stores chat bubbles in cursorDiskKV under
+ *   bubbleId:<composer-id>:<bubble-id>
+ * Each row is a JSON blob with a numeric `type` field:
+ *   type=1 -> user prompt
+ *   type=2 -> assistant response
+ *   (other types: tool results, suggestions, etc.)
+ *
+ * We synthesize a payload shape compatible with extractMessageText's
+ * Codex parser ({type:"event_msg", payload:{type:"user_message", message}})
+ * so downstream consumers don't need to special-case cursor.
+ */
+function importUserBubbles(db, batch, dbPath) {
+  const rows = db.prepare(
+    "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+  ).all();
+  let inserted = 0;
+  let lineNum = 0;
+  for (const row of rows) {
+    lineNum++;
+    let bubble = null;
+    try { bubble = JSON.parse(row.value); } catch { continue; }
+    if (!bubble || typeof bubble !== "object") continue;
+    if (bubble.type !== 1) continue;             // 1 = user, 2 = assistant
+    const text = bubble.text;
+    if (!text || typeof text !== "string") continue;
+    if (text.length < 4) continue;                // empty / accidental clicks
+
+    // Pull composer+bubble id from "bubbleId:<composer>:<bubble>".
+    const parts = row.key.split(":");
+    const composerId = parts[1] || "";
+    const bubbleId = parts.slice(2).join(":");
+    const eventId = bubbleEventId(composerId, bubbleId);
+
+    const synthetic = JSON.stringify({
+      type: "event_msg",
+      payload: { type: "user_message", message: text },
+      bubble_id: bubbleId,
+      composer_id: composerId,
+    });
+
+    // No reliable per-bubble timestamp in cursor's blob, so we leave
+    // timestamp NULL. Importers downstream that need ordering (e.g.
+    // context-degradation curve) rely on session-level timestamps
+    // from turns; bubbles still feed the message-pool stats fine.
+    batch.add(`INSERT OR REPLACE INTO raw_events
+      (event_id, source_path, source_line, timestamp, event_type, payload_type, raw_json, source)
+      VALUES (${sqlString(eventId)}, ${sqlString(dbPath)}, ${sqlNumber(lineNum)},
+      NULL, ${sqlString("event_msg")}, ${sqlString("user_message")},
+      ${sqlString(synthetic)}, ${sqlString(SOURCE)})`);
+    inserted++;
+  }
+  return inserted;
+}
+
 function importToolCalls(db, batch) {
   // agentKv:blob:* entries are content-addressed conversation messages.
   // Assistant messages contain arrays of content parts; tool-call parts
@@ -148,10 +213,12 @@ export function importCursor() {
 
   let composerCount = 0;
   let toolCallCount = 0;
+  let userBubbleCount = 0;
 
   try {
     composerCount = importComposers(db, batch, dbPath);
     toolCallCount = importToolCalls(db, batch);
+    userBubbleCount = importUserBubbles(db, batch, dbPath);
   } finally {
     db.close();
   }
@@ -161,6 +228,7 @@ export function importCursor() {
   return {
     source: SOURCE,
     composers: composerCount,
-    toolCalls: toolCallCount
+    toolCalls: toolCallCount,
+    userBubbles: userBubbleCount
   };
 }
