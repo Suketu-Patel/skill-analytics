@@ -19,8 +19,10 @@ import {
   toolTransitions,
   pepTalkIndex,
   aiFingerprint,
+  heroVerdict,
   learnNoisePhrases,
 } from "./crazy.js";
+import { getUserSkillCounts } from "./metrics.js";
 
 const KIND = "crazy_snapshot";
 const SNAPSHOT_KEY = sha256("crazy:latest:v1");
@@ -52,15 +54,29 @@ export function precomputeCrazySnapshot() {
     // eslint-disable-next-line no-console
     console.error("learnNoisePhrases failed:", err?.message || err);
   }
+  const frustration = frustrationByHour();
+  const contextDegradation = contextDegradationCurve();
+  const pepTalk = pepTalkIndex();
+  const fingerprint = aiFingerprint();
+  const userSkills = getUserSkillCounts({}).total;
+  const verdict = heroVerdict({
+    frustration,
+    contextDegradation,
+    pepTalk,
+    fingerprint,
+    userSkills,
+  });
   const payload = {
     generated_at: nowIso(),
-    frustration: frustrationByHour(),
+    verdict,
+    frustration,
     cost_per_loc: costPerLOCKept(),
-    context_degradation: contextDegradationCurve(),
+    context_degradation: contextDegradation,
     phantom_edits: phantomEdits(),
     tool_transitions: toolTransitions(),
-    pep_talk: pepTalkIndex(),
-    fingerprint: aiFingerprint(),
+    pep_talk: pepTalk,
+    fingerprint,
+    user_skills_total: userSkills,
   };
   const batch = new SqlBatch();
   batch.add(

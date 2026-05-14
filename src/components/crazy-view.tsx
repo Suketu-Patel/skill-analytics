@@ -5,8 +5,10 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,13 +17,14 @@ import {
 import {
   AlertTriangle,
   Brain,
+  Check,
+  Copy,
   DollarSign,
   Fingerprint,
   Ghost,
   MessageCircle,
+  Quote,
   Repeat,
-  Sparkles,
-  Zap,
 } from "lucide-react";
 import { fetchJson } from "./fetch-json";
 
@@ -29,10 +32,14 @@ import { fetchJson } from "./fetch-json";
 
 type CrazyPayload = {
   ok: boolean;
+  verdict: { sentence: string; parts: string[] };
   frustration: {
     by_hour: { hour: number; total: number; frustrated: number; rate: number }[];
     total_messages: number;
     total_frustrated: number;
+    peak_hour: number | null;
+    baseline_rate: number;
+    takeaway: string | null;
   };
   cost_per_loc: {
     cwd: string;
@@ -46,6 +53,7 @@ type CrazyPayload = {
   }[];
   context_degradation: {
     by_band: { band: string; turns: number; corrected: number; rate: number }[];
+    takeaway: string | null;
   };
   phantom_edits: { path: string; cwd: string | null; edits: number; last_source: string }[];
   tool_transitions: { from: string; to: string; count: number }[];
@@ -53,7 +61,10 @@ type CrazyPayload = {
     total_assistant_msgs: number;
     pep_msgs: number;
     rate: number;
+    pep_followed_by_correction: number;
+    sycophancy_rate: number;
     top_phrases: { phrase: string; count: number }[];
+    takeaway: string | null;
   };
   fingerprint: {
     top_models: { model: string; count: number }[];
@@ -68,6 +79,7 @@ type CrazyPayload = {
     avg_turns_per_session: number;
     top_correction_phrase: { phrase: string; count: number } | null;
   };
+  user_skills_total: number;
 };
 
 // ─── main view ──────────────────────────────────────────────────────────
@@ -88,7 +100,7 @@ export default function CrazyView({ refreshNonce = 0 }: { refreshNonce?: number 
   if (loading && !data) {
     return (
       <section className="panel p-12 text-center text-sm text-slate-500">
-        Loading uncomfortable truths...
+        Mining your transcripts for patterns...
       </section>
     );
   }
@@ -99,78 +111,164 @@ export default function CrazyView({ refreshNonce = 0 }: { refreshNonce?: number 
 
   return (
     <section className="flex flex-col gap-4">
-      <header className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
-        <h1 className="text-lg font-semibold text-ink">Crazy</h1>
-        <p className="text-xs text-slate-500">
-          Seven panels that probably reveal more about your AI habits than you bargained for.
-          Computed locally from your session JSONLs.
-        </p>
-      </header>
+      <VerdictHero verdict={data.verdict.sentence} />
 
-      <FingerprintCard fp={data.fingerprint} />
+      <FingerprintCard fp={data.fingerprint} userSkills={data.user_skills_total} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <FrustrationCurve data={data.frustration} />
-        <ContextDegradation data={data.context_degradation} />
-      </div>
+      {/* Hero panel: the most striking insight. Full-width on every viewport. */}
+      <ContextDegradation data={data.context_degradation} />
+
+      <FrustrationCurve data={data.frustration} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <PepTalkPanel data={data.pep_talk} />
         <ToolTransitions data={data.tool_transitions} />
       </div>
 
-      <CostPerLOC data={data.cost_per_loc} />
-
-      <PhantomEdits data={data.phantom_edits} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <CostPerLOC data={data.cost_per_loc} />
+        <PhantomEdits data={data.phantom_edits} />
+      </div>
     </section>
   );
 }
 
-// ─── #21: AI fingerprint ────────────────────────────────────────────────
+// ─── Hero verdict (the screenshottable line) ────────────────────────────
 
-function FingerprintCard({ fp }: { fp: CrazyPayload["fingerprint"] }) {
+function VerdictHero({ verdict }: { verdict: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(verdict);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // best-effort; clipboard not available in some contexts
+    }
+  }
+  return (
+    <div className="rounded-lg border-2 border-ink bg-gradient-to-br from-violet/5 via-white to-teal/5 p-6 dark:from-violet/10 dark:via-slate-900 dark:to-teal/10">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          <Quote size={12} /> Your AI tab, in one line
+        </span>
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy verdict to clipboard"
+          className="inline-flex items-center gap-1 rounded-md border border-line bg-white px-2 py-1 text-[11px] font-medium text-slate-600 hover:border-teal hover:text-ink dark:bg-slate-900"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <p className="text-lg font-semibold leading-snug text-ink sm:text-xl">{verdict}</p>
+    </div>
+  );
+}
+
+// ─── AI fingerprint ─────────────────────────────────────────────────────
+
+function FingerprintCard({
+  fp,
+  userSkills,
+}: {
+  fp: CrazyPayload["fingerprint"];
+  userSkills: number;
+}) {
   const peak = fp.peak_hour != null ? `${String(fp.peak_hour).padStart(2, "0")}:00` : "—";
   const projShort = fp.top_project ? fp.top_project.split("/").slice(-2).join("/") : "—";
   return (
-    <div className="rounded-lg border-2 border-violet/40 bg-violet/5 p-5">
+    <div className="rounded-lg border border-violet/30 bg-violet/5 p-5">
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-violet">
         <Fingerprint size={14} />
-        Your AI fingerprint
+        Your fingerprint
       </h2>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <FpStat label="Peak hour" value={peak} sub={`${fp.peak_hour_count} sessions started`} />
+        <FpStat label="Peak hour" value={peak} sub={`${fp.peak_hour_count} sessions`} />
         <FpStat
           label="Top model"
           value={fp.top_models[0]?.model || "—"}
           sub={fp.top_models[1] ? `then ${fp.top_models[1].model}` : ""}
           mono
         />
-        <FpStat
-          label="Most-worked project"
-          value={projShort}
-          sub={`${fp.top_project_turns} turns`}
-          mono
-        />
+        <FpStat label="Skills you made" value={userSkills.toString()} sub="not vendor/plugin" />
         <FpStat
           label="Avg turns / session"
           value={fp.avg_turns_per_session.toString()}
-          sub="across all sources"
+          sub="all sources combined"
+        />
+        <FpStat label="Most-worked project" value={projShort} sub={`${fp.top_project_turns} turns`} mono />
+        <FpStat
+          label="Models tried"
+          value={fp.top_models.length.toString()}
+          sub="distinct lifetime"
+        />
+        <FpStat
+          label="You vs the model"
+          value={fp.top_correction_phrase ? `"${fp.top_correction_phrase.phrase}"` : "—"}
+          sub={
+            fp.top_correction_phrase
+              ? `your most-typed pushback (${fp.top_correction_phrase.count.toLocaleString()}x)`
+              : ""
+          }
+          tone="coral"
+        />
+        <FpStat
+          label="Your voice"
+          value={fp.favorite_phrase ? `"${fp.favorite_phrase.phrase}"` : "—"}
+          sub={
+            fp.favorite_phrase
+              ? `top conversational phrase (${fp.favorite_phrase.count.toLocaleString()}x)`
+              : ""
+          }
         />
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <PhraseList
-          label="Favorite phrases"
+          label="Things you say"
           tone="default"
           items={fp.favorite_phrases.map((p) => ({ text: p.phrase, count: p.count }))}
           emptyText="not enough signal yet"
         />
         <PhraseList
-          label="Most frustrating phrases"
+          label="Things you say when annoyed"
           tone="coral"
           items={fp.frustrating_phrases.map((p) => ({ text: p.phrase, count: p.count }))}
           emptyText="zero frustration detected (suspicious)"
         />
       </div>
+    </div>
+  );
+}
+
+function FpStat({
+  label,
+  value,
+  sub,
+  mono = false,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  mono?: boolean;
+  tone?: "default" | "coral";
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 truncate text-base font-bold ${
+          tone === "coral" ? "text-coral" : "text-ink"
+        } ${mono ? "font-mono text-sm" : ""}`}
+        title={value}
+      >
+        {value}
+      </div>
+      {sub && <div className="text-[10px] text-slate-500">{sub}</div>}
     </div>
   );
 }
@@ -218,93 +316,62 @@ function PhraseList({
   );
 }
 
-function FpStat({
-  label,
-  value,
-  sub,
-  mono = false,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  mono?: boolean;
-  tone?: "default" | "coral";
-}) {
-  return (
-    <div>
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-        {label}
-      </div>
-      <div
-        className={`mt-0.5 truncate text-base font-bold ${
-          tone === "coral" ? "text-coral" : "text-ink"
-        } ${mono ? "font-mono text-sm" : ""}`}
-        title={value}
-      >
-        {value}
-      </div>
-      {sub && <div className="text-[10px] text-slate-500">{sub}</div>}
-    </div>
-  );
-}
-
-// ─── shared panel header ──────────────────────────────────────────────
+// ─── shared panel chrome ───────────────────────────────────────────────
 
 function PanelHeader({
   Icon,
   title,
+  takeaway,
   right,
+  tone = "default",
 }: {
   Icon: typeof Brain;
   title: string;
+  takeaway?: string | null;
   right?: React.ReactNode;
+  tone?: "default" | "coral" | "violet";
 }) {
+  const accent =
+    tone === "coral" ? "text-coral" : tone === "violet" ? "text-violet" : "text-slate-500";
   return (
-    <div className="mb-2 flex items-baseline justify-between gap-2">
-      <h2 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-        <Icon size={14} className="text-slate-500" />
-        {title}
-      </h2>
-      {right && <span className="text-xs text-slate-500">{right}</span>}
+    <div className="mb-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className={`flex items-center gap-1.5 text-sm font-semibold text-ink`}>
+          <Icon size={14} className={accent} />
+          {title}
+        </h2>
+        {right && <span className="text-xs text-slate-500">{right}</span>}
+      </div>
+      {takeaway && (
+        <p
+          className={`mt-1.5 text-sm leading-snug ${
+            tone === "coral" ? "text-coral" : "text-ink"
+          }`}
+        >
+          {takeaway}
+        </p>
+      )}
     </div>
   );
 }
 
-// ─── #2: Frustration curve by hour of day ──────────────────────────────
-
-function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
-  const chart = data.by_hour.map((b) => ({
-    hour: `${b.hour}h`,
-    rate: Math.round(b.rate * 1000) / 10,
-    total: b.total,
-  }));
-  const overall = data.total_messages > 0 ? (data.total_frustrated / data.total_messages) * 100 : 0;
-  return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
-      <PanelHeader
-        Icon={AlertTriangle}
-        title="Frustration by hour"
-        right={`${overall.toFixed(1)}% overall · ${data.total_frustrated.toLocaleString()} corrections`}
-      />
-      <p className="mb-2 text-xs text-slate-500">
-        % of your messages containing pushback or profanity (&quot;no&quot;, &quot;wrong&quot;,
-        &quot;fuck&quot;, &quot;wtf&quot;, &quot;ugh&quot;, etc.), bucketed by hour-of-day.
-      </p>
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={chart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
-          <YAxis tick={{ fontSize: 10 }} unit="%" />
-          <Tooltip formatter={(v: number) => `${v}%`} labelFormatter={(l: string) => `Hour: ${l}`} />
-          <Bar dataKey="rate" fill="#f43f5e" radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
+function Panel({
+  tone = "default",
+  children,
+}: {
+  tone?: "default" | "coral" | "violet";
+  children: React.ReactNode;
+}) {
+  const border =
+    tone === "coral"
+      ? "border-coral/30 bg-coral/5"
+      : tone === "violet"
+        ? "border-violet/30 bg-violet/5"
+        : "border-line bg-white dark:bg-slate-900";
+  return <div className={`rounded-lg border p-4 ${border}`}>{children}</div>;
 }
 
-// ─── #6: Context degradation curve ─────────────────────────────────────
+// ─── #6: Context degradation (HERO panel) ──────────────────────────────
 
 function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"] }) {
   const chart = data.by_band.map((b) => ({
@@ -313,48 +380,98 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
     turns: b.turns,
   }));
   const worst = [...data.by_band].sort((a, b) => b.rate - a.rate)[0];
+  const tone =
+    worst && worst.rate >= 0.5 ? "coral" : worst && worst.rate >= 0.3 ? "violet" : "default";
   return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
+    <Panel tone={tone}>
       <PanelHeader
         Icon={Brain}
-        title="Context that broke the camel"
-        right={`worst: ${worst?.band} (${Math.round((worst?.rate || 0) * 100)}%)`}
+        title="Where the model loses you"
+        takeaway={data.takeaway}
+        tone={tone}
+        right={`peak ${worst?.band ?? "—"} at ${Math.round((worst?.rate || 0) * 100)}%`}
       />
-      <p className="mb-2 text-xs text-slate-500">
-        Correction rate vs cumulative session tokens. At what context length do you start pushing
-        back?
-      </p>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={chart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={chart} margin={{ top: 10, right: 18, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="band" tick={{ fontSize: 10 }} />
-          <YAxis tick={{ fontSize: 10 }} unit="%" />
+          <XAxis dataKey="band" tick={{ fontSize: 11 }} />
+          <YAxis tick={{ fontSize: 11 }} unit="%" />
           <Tooltip
-            formatter={(v: number) => `${v}%`}
-            labelFormatter={(l: string) => `Cumulative tokens: ${l}`}
+            formatter={(v: number, _name, item) => [`${v}%`, `${item?.payload?.turns} turns`]}
+            labelFormatter={(l: string) => `Cumulative tokens in session: ${l}`}
           />
-          <Line type="monotone" dataKey="rate" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
+          {/* 30% reference line as a "things-are-getting-rough" marker */}
+          <ReferenceLine y={30} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: "30%", position: "right", fontSize: 10, fill: "#64748b" }} />
+          <Line
+            type="monotone"
+            dataKey="rate"
+            stroke={tone === "coral" ? "#f43f5e" : "#8b5cf6"}
+            strokeWidth={2.5}
+            dot={{ r: 5 }}
+          />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+    </Panel>
   );
 }
 
-// ─── #18: Pep-talk index ───────────────────────────────────────────────
+// ─── #2: Frustration curve by hour ─────────────────────────────────────
+
+function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
+  const chart = data.by_hour.map((b) => ({
+    hour: String(b.hour).padStart(2, "0"),
+    rate: Math.round(b.rate * 1000) / 10,
+    total: b.total,
+    isPeak: b.hour === data.peak_hour,
+  }));
+  const overall = data.total_messages > 0 ? (data.total_frustrated / data.total_messages) * 100 : 0;
+  return (
+    <Panel>
+      <PanelHeader
+        Icon={AlertTriangle}
+        title="When you push back hardest"
+        takeaway={data.takeaway}
+        right={`${overall.toFixed(1)}% baseline · ${data.total_frustrated.toLocaleString()} corrections in ${data.total_messages.toLocaleString()} msgs`}
+      />
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={chart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+          <YAxis tick={{ fontSize: 10 }} unit="%" />
+          <Tooltip
+            formatter={(v: number, _n, item) => [`${v}%`, `${item?.payload?.total} msgs`]}
+            labelFormatter={(l: string) => `Hour: ${l}`}
+          />
+          <ReferenceLine
+            y={Math.round(overall * 10) / 10}
+            stroke="#94a3b8"
+            strokeDasharray="4 4"
+            label={{ value: "baseline", position: "right", fontSize: 10, fill: "#64748b" }}
+          />
+          <Bar dataKey="rate" radius={[4, 4, 0, 0]}>
+            {chart.map((row) => (
+              <Cell key={row.hour} fill={row.isPeak ? "#f43f5e" : "#fb7185"} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Panel>
+  );
+}
+
+// ─── #18: Pep-talk + sycophancy ────────────────────────────────────────
 
 function PepTalkPanel({ data }: { data: CrazyPayload["pep_talk"] }) {
+  const sycoBad = data.sycophancy_rate >= 0.15;
   return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
+    <Panel tone={sycoBad ? "coral" : "default"}>
       <PanelHeader
         Icon={MessageCircle}
-        title="Pep-talk index"
-        right={`${(data.rate * 100).toFixed(1)}% of ${data.total_assistant_msgs.toLocaleString()} msgs`}
+        title="Performance vs delivery"
+        takeaway={data.takeaway}
+        tone={sycoBad ? "coral" : "default"}
+        right={`${(data.rate * 100).toFixed(1)}% pep-talk · ${(data.sycophancy_rate * 100).toFixed(0)}% then corrected`}
       />
-      <p className="mb-3 text-xs text-slate-500">
-        How often the model says encouraging-but-empty things (&quot;perfect&quot;, &quot;great
-        question&quot;, &quot;exactly&quot;). High % may mean it&apos;s performing competence rather
-        than demonstrating it.
-      </p>
       <ul className="flex flex-col gap-1">
         {data.top_phrases.map((p) => (
           <li
@@ -366,44 +483,45 @@ function PepTalkPanel({ data }: { data: CrazyPayload["pep_talk"] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </Panel>
   );
 }
 
-// ─── #9: Tool-call transitions ─────────────────────────────────────────
+// ─── #9: Tool transitions ──────────────────────────────────────────────
 
 function ToolTransitions({ data }: { data: CrazyPayload["tool_transitions"] }) {
   const max = data.length > 0 ? data[0].count : 1;
+  const iteration = (t: { from: string; to: string }) => t.from === t.to;
   return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
-      <PanelHeader Icon={Repeat} title="Tool-call transitions" />
-      <p className="mb-3 text-xs text-slate-500">
-        Most common back-to-back tool calls. A → A pairs mean you&apos;re iterating on the same op;
-        A → B pairs show real workflows.
-      </p>
+    <Panel>
+      <PanelHeader
+        Icon={Repeat}
+        title="Your AI workflow shape"
+        takeaway={"A→A pairs are iteration on one op; A→B pairs show real workflows. Both shapes show up here."}
+      />
       <ul className="flex flex-col gap-1.5">
-        {data.map((t) => (
+        {data.slice(0, 12).map((t) => (
           <li key={`${t.from}-${t.to}`} className="text-xs">
             <div className="mb-0.5 flex items-baseline justify-between gap-2">
               <span className="font-mono text-ink">
-                {t.from} <span className="text-slate-400">→</span> {t.to}
+                {t.from} <span className={iteration(t) ? "text-amber" : "text-teal"}>→</span> {t.to}
               </span>
               <span className="text-slate-500 tabular-nums">{t.count.toLocaleString()}</span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
               <div
-                className="h-full rounded-full bg-teal"
+                className={`h-full rounded-full ${iteration(t) ? "bg-amber" : "bg-teal"}`}
                 style={{ width: `${(t.count / max) * 100}%` }}
               />
             </div>
           </li>
         ))}
       </ul>
-    </div>
+    </Panel>
   );
 }
 
-// ─── #5: Cost per LOC kept ─────────────────────────────────────────────
+// ─── #5: Cost per LOC ──────────────────────────────────────────────────
 
 function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
   const ranked = useMemo(
@@ -413,14 +531,18 @@ function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
         .sort((a, b) => (b.cost_per_loc || 0) - (a.cost_per_loc || 0)),
     [data]
   );
+  const worst = ranked[0];
   return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
-      <PanelHeader Icon={DollarSign} title="Cost per surviving LOC (rough)" />
-      <p className="mb-3 text-xs text-slate-500">
-        Spend per source line currently on disk in each repo. Imperfect (counts cost that wrote
-        no code, ignores deleted lines), but the ratio surfaces repos where you burned tokens
-        for little code in return.
-      </p>
+    <Panel>
+      <PanelHeader
+        Icon={DollarSign}
+        title="What each line of code cost"
+        takeaway={
+          worst
+            ? `Most expensive line you kept: $${(worst.cost_per_loc || 0).toFixed(3)} in ${worst.cwd_short}. Rough math, ignores deleted lines.`
+            : null
+        }
+      />
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-line text-left text-[10px] uppercase tracking-wider text-slate-500">
@@ -439,7 +561,7 @@ function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
               </td>
             </tr>
           )}
-          {ranked.slice(0, 10).map((r) => (
+          {ranked.slice(0, 8).map((r) => (
             <tr key={r.cwd} className="border-b border-line/50">
               <td className="py-1.5 font-mono text-ink" title={r.cwd}>
                 {r.cwd_short}
@@ -458,7 +580,7 @@ function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </Panel>
   );
 }
 
@@ -466,19 +588,19 @@ function CostPerLOC({ data }: { data: CrazyPayload["cost_per_loc"] }) {
 
 function PhantomEdits({ data }: { data: CrazyPayload["phantom_edits"] }) {
   return (
-    <div className="rounded-lg border border-line bg-white p-4 dark:bg-slate-900">
-      <PanelHeader Icon={Ghost} title="Phantom edit graveyard" />
-      <p className="mb-3 text-xs text-slate-500">
-        Files Claude/Codex edited that don&apos;t exist on disk anymore. Renamed, deleted, or
-        hallucinated. Sorted by edit count (more edits = more wasted effort).
-      </p>
-      {data.length === 0 ? (
-        <div className="py-6 text-center text-xs text-slate-500">
-          No phantom edits found. Either your AIs are tidy, or every edit landed somewhere real.
-        </div>
-      ) : (
-        <ul className="grid max-h-80 grid-cols-1 gap-1 overflow-y-auto text-xs md:grid-cols-2">
-          {data.slice(0, 30).map((e) => (
+    <Panel>
+      <PanelHeader
+        Icon={Ghost}
+        title="Files the AI wrote, then ghosted"
+        takeaway={
+          data.length > 0
+            ? `${data.length} file${data.length === 1 ? "" : "s"} the AI edited that no longer exist on disk. Renamed, deleted, or hallucinated.`
+            : "Either your AIs are tidy or every edit landed somewhere real."
+        }
+      />
+      {data.length === 0 ? null : (
+        <ul className="max-h-72 overflow-y-auto text-xs">
+          {data.slice(0, 16).map((e) => (
             <li
               key={e.path}
               className="flex items-baseline justify-between gap-2 border-b border-line/40 py-1.5"
@@ -493,11 +615,6 @@ function PhantomEdits({ data }: { data: CrazyPayload["phantom_edits"] }) {
           ))}
         </ul>
       )}
-    </div>
+    </Panel>
   );
 }
-
-// Sparkles/Zap kept imported in case a future panel needs an
-// attention-grabbing accent. Tree-shaken if unused.
-void Sparkles;
-void Zap;

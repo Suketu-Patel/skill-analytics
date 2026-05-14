@@ -257,15 +257,35 @@ export function frustrationByHour() {
     const text = extractMessageText(r);
     if (text && CORRECTION_RE.test(text)) buckets[h].frustrated++;
   }
+  const byHour = buckets.map((b, h) => ({
+    hour: h,
+    total: b.total,
+    frustrated: b.frustrated,
+    rate: b.total > 0 ? b.frustrated / b.total : 0,
+  }));
+  // Peak frustration hour with enough samples to mean something.
+  const peak = [...byHour]
+    .filter((b) => b.total >= 20)
+    .sort((a, b) => b.rate - a.rate)[0];
+  const baseline =
+    rows.length > 0
+      ? buckets.reduce((a, b) => a + b.frustrated, 0) / rows.length
+      : 0;
+  let takeaway = null;
+  if (peak && baseline > 0) {
+    const lift = ((peak.rate - baseline) / baseline) * 100;
+    if (lift > 15) {
+      const hourLabel = `${String(peak.hour).padStart(2, "0")}:00`;
+      takeaway = `Hour ${hourLabel} is your danger zone, ${Math.round(peak.rate * 100)}% correction rate vs ${Math.round(baseline * 100)}% baseline (+${Math.round(lift)}%).`;
+    }
+  }
   return {
-    by_hour: buckets.map((b, h) => ({
-      hour: h,
-      total: b.total,
-      frustrated: b.frustrated,
-      rate: b.total > 0 ? b.frustrated / b.total : 0,
-    })),
+    by_hour: byHour,
     total_messages: rows.length,
     total_frustrated: buckets.reduce((a, b) => a + b.frustrated, 0),
+    peak_hour: peak?.hour ?? null,
+    baseline_rate: baseline,
+    takeaway,
   };
 }
 
@@ -418,7 +438,26 @@ export function contextDegradationCurve() {
     if (hasCorrectionShortlyAfter(t.started_at)) out[idx].corrected++;
   }
   out.forEach((b) => { b.rate = b.turns > 0 ? b.corrected / b.turns : 0; });
-  return { by_band: out };
+  // Takeaway: find the biggest jump between consecutive bands. That's
+  // where context length stops paying for itself.
+  let jumpFrom = null;
+  let maxDelta = 0;
+  for (let i = 1; i < out.length; i++) {
+    const delta = out[i].rate - out[i - 1].rate;
+    if (delta > maxDelta && out[i].turns >= 10) {
+      maxDelta = delta;
+      jumpFrom = out[i - 1].band;
+    }
+  }
+  const firstRate = out[0]?.rate || 0;
+  const lastRate = out[out.length - 1]?.rate || 0;
+  let takeaway = null;
+  if (lastRate > firstRate * 1.4 && lastRate >= 0.3) {
+    takeaway = `Correction rate climbs from ${Math.round(firstRate * 100)}% at small context to ${Math.round(lastRate * 100)}% past 200k tokens.${jumpFrom ? ` Sharpest jump after ${jumpFrom}.` : ""} Split sessions earlier.`;
+  } else if (lastRate >= 0.3) {
+    takeaway = `Correction rate hovers near ${Math.round(lastRate * 100)}% even past 200k tokens. Context length isn't the bottleneck for you.`;
+  }
+  return { by_band: out, takeaway };
 }
 
 // — #8: Phantom edit graveyard ────────────────────────────────────────
@@ -519,6 +558,36 @@ export function toolTransitions(limit = 15) {
 // whether those sessions ended in user corrections. High pep-talk +
 // high correction rate is the model bullshitting.
 export function pepTalkIndex() {
+  // Pre-collect frustration timestamps so we can answer "did the user
+  // push back within 5 min of this pep talk?". Sorted for binary search.
+  const userMsgs = queryRows(`
+    SELECT timestamp, raw_json FROM raw_events
+    WHERE (payload_type IN ('user_message', 'user') OR event_type = 'user')
+      AND timestamp IS NOT NULL
+    ORDER BY timestamp
+    LIMIT 30000
+  `);
+  const frustTimes = [];
+  for (const m of userMsgs) {
+    const text = extractMessageText(m, { userOnly: true });
+    if (!text || !CORRECTION_RE.test(text)) continue;
+    const t = new Date(m.timestamp).getTime();
+    if (!Number.isNaN(t)) frustTimes.push(t);
+  }
+  frustTimes.sort((a, b) => a - b);
+  function correctionWithin5Min(iso) {
+    if (!iso) return false;
+    const start = new Date(iso).getTime();
+    if (Number.isNaN(start)) return false;
+    let lo = 0, hi = frustTimes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (frustTimes[mid] < start) lo = mid + 1; else hi = mid;
+    }
+    const t = frustTimes[lo];
+    return t != null && t - start < 5 * 60 * 1000;
+  }
+
   const rows = queryRows(`
     SELECT timestamp, raw_json, source
     FROM raw_events
@@ -528,6 +597,7 @@ export function pepTalkIndex() {
   `);
   let total = 0;
   let pepCount = 0;
+  let pepFollowedByCorrection = 0;
   const topPhrases = new Map();
   for (const r of rows) {
     const text = extractMessageText(r);
@@ -536,20 +606,31 @@ export function pepTalkIndex() {
     const matches = text.match(new RegExp(PEPTALK_RE.source, "gi"));
     if (matches && matches.length > 0) {
       pepCount++;
+      if (correctionWithin5Min(r.timestamp)) pepFollowedByCorrection++;
       for (const m of matches) {
         const norm = m.toLowerCase().trim();
         topPhrases.set(norm, (topPhrases.get(norm) || 0) + 1);
       }
     }
   }
+  const sycophancyRate = pepCount > 0 ? pepFollowedByCorrection / pepCount : 0;
+  let takeaway = null;
+  if (pepCount > 50) {
+    const topPhrase = [...topPhrases.entries()].sort((a, b) => b[1] - a[1])[0];
+    const topWord = topPhrase ? `"${topPhrase[0]}"` : "encouraging filler";
+    takeaway = `The model said ${topWord} ${(topPhrase?.[1] || 0).toLocaleString()} times. In ${pepFollowedByCorrection.toLocaleString()} of ${pepCount.toLocaleString()} pep-talked turns (${Math.round(sycophancyRate * 100)}%), you pushed back within 5 minutes.`;
+  }
   return {
     total_assistant_msgs: total,
     pep_msgs: pepCount,
     rate: total > 0 ? pepCount / total : 0,
+    pep_followed_by_correction: pepFollowedByCorrection,
+    sycophancy_rate: sycophancyRate,
     top_phrases: [...topPhrases.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([phrase, count]) => ({ phrase, count })),
+    takeaway,
   };
 }
 
@@ -849,4 +930,56 @@ export function aiFingerprint() {
       : 0,
     top_correction_phrase: topFrustration,
   };
+}
+
+// — Hero verdict ───────────────────────────────────────────────────────
+//
+// Distill the most striking findings into one sentence shown at the
+// top of the Crazy tab. Pure text composition; the panels still carry
+// the detail. Goal: the line you screenshot and send to a friend.
+export function heroVerdict({
+  frustration,
+  contextDegradation,
+  pepTalk,
+  fingerprint,
+  userSkills,
+}) {
+  const parts = [];
+  const peakHour = fingerprint?.peak_hour != null
+    ? `${String(fingerprint.peak_hour).padStart(2, "0")}:00`
+    : null;
+  if (peakHour) parts.push(`Peak hour ${peakHour}`);
+
+  const topModel = fingerprint?.top_models?.[0]?.model;
+  if (topModel) parts.push(`mostly ${topModel}`);
+
+  if (typeof userSkills === "number" && userSkills > 0) {
+    parts.push(`${userSkills} skill${userSkills === 1 ? "" : "s"} you wrote yourself`);
+  }
+
+  const lastBand = contextDegradation?.by_band?.slice(-1)?.[0];
+  if (lastBand && lastBand.rate >= 0.3 && lastBand.turns >= 10) {
+    parts.push(
+      `${Math.round(lastBand.rate * 100)}% correction rate past 200k tokens`
+    );
+  }
+
+  const topFrust = fingerprint?.most_frustrating_phrase;
+  if (topFrust && topFrust.count >= 50) {
+    parts.push(
+      `said "${topFrust.phrase}" ${topFrust.count.toLocaleString()} times`
+    );
+  }
+
+  if (parts.length === 0) {
+    return {
+      sentence: "Not enough data yet. Run a few more sessions and re-import.",
+      parts: [],
+    };
+  }
+  // Sentence-case the first part, then join the rest with comma+lowercase.
+  const head = parts[0];
+  const tail = parts.slice(1).map((p) => p[0].toLowerCase() + p.slice(1));
+  const sentence = [head, ...tail].join(", ") + ".";
+  return { sentence, parts };
 }
