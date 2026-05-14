@@ -1317,14 +1317,14 @@ export default function DashboardClient() {
   // EVERYTHING in the date+source window — we recompute the visible stats from
   // the already-filtered skill list so the cards match the filter pills.
   const categoryActive = categoryFilter !== "all" || projectFilter !== "all" || hideUnused;
-  const totals: Record<string, number> = categoryActive
+  const totals: Record<string, unknown> = categoryActive
     ? (() => {
         const skillNames = new Set(filteredSkills.map((s) => s.name));
         const eventsSum = filteredSkills.reduce((acc, s) => acc + (s.events || 0), 0);
         const tokensSum = filteredSkills.reduce((acc, s) => acc + (s.total_tokens || 0), 0);
         const errorsSum = filteredSkills.reduce((acc, s) => acc + (s.errors || 0), 0);
         const activeCount = filteredSkills.filter((s) => (s.events || 0) > 0).length;
-        // Avg turn — average the visible skills' avg_duration_ms (skip zeros)
+        // Avg turn, average the visible skills' avg_duration_ms (skip zeros)
         const durations = filteredSkills.map((s) => s.avg_duration_ms || 0).filter((d) => d > 0);
         const avgDur = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
         const hardErrors = errors.filter(
@@ -1338,10 +1338,14 @@ export default function DashboardClient() {
           errors: errorsSum,
           hard_errors: hardErrors,
           avg_duration_ms: avgDur,
-          turns: Number(serverTotals.turns || 0)
+          turns: Number((serverTotals as Record<string, unknown>).turns || 0),
+          // user_skills is a count of skills on disk, doesn't change with
+          // the category/project filter. Carry through from the server.
+          user_skills: (serverTotals as Record<string, unknown>).user_skills || 0,
+          user_skills_by_source: (serverTotals as Record<string, unknown>).user_skills_by_source || {},
         };
       })()
-    : (serverTotals as Record<string, number>);
+    : (serverTotals as Record<string, unknown>);
   const activeSkillRate =
     Number(totals.skills || 0) > 0
       ? Math.round((Number(totals.active_skills || 0) / Number(totals.skills)) * 100)
