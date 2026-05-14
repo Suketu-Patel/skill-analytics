@@ -233,6 +233,8 @@ function hourFromIso(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
+  // Local time: a human's "hour 4" means 4 AM in their timezone, not 4 UTC.
+  // The Node server runs on the user's machine so local == user-local.
   return d.getHours();
 }
 
@@ -649,7 +651,7 @@ export function aiFingerprint() {
     LIMIT 3
   `);
   const peakHour = queryRows(`
-    SELECT strftime('%H', started_at) AS h, COUNT(*) AS n
+    SELECT strftime('%H', started_at, 'localtime') AS h, COUNT(*) AS n
     FROM turns
     WHERE started_at IS NOT NULL
     GROUP BY h
@@ -1045,8 +1047,12 @@ export function dayNightCurve() {
   const frustByHour = new Map(frust.by_hour.map((b) => [b.hour, b.rate]));
 
   // Per-hour tool failure: join tool_events to turns for the timestamp.
+  // strftime with 'localtime' modifier converts the stored UTC ISO to
+  // the server's local timezone, matching how the frustration line is
+  // computed via Node's Date.getHours() (also local). Without this, the
+  // two lines on the same chart would be in different zones.
   const fails = queryRows(`
-    SELECT CAST(strftime('%H', t.started_at) AS INTEGER) AS h,
+    SELECT CAST(strftime('%H', t.started_at, 'localtime') AS INTEGER) AS h,
            COUNT(*) AS total,
            SUM(CASE WHEN te.exit_code IS NOT NULL AND te.exit_code <> 0 THEN 1 ELSE 0 END) AS fails
     FROM tool_events te
