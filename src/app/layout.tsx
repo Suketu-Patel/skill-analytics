@@ -9,12 +9,15 @@ export const metadata: Metadata = {
 
 // Inline init: reads the persisted theme + system preference and applies
 // the `dark` class to <html> before React hydrates. Without this the page
-// renders light first and snaps to dark on first paint (FOUC). "system"
-// follows prefers-color-scheme; "light"/"dark" pin explicitly.
+// renders light first and snaps to dark on first paint (FOUC).
+// Default is "light" — a fresh install or wiped localStorage keeps the
+// dashboard light no matter what the OS is doing. "system" still
+// follows prefers-color-scheme when the user explicitly picks it;
+// "dark" pins dark explicitly.
 const THEME_INIT = `
 (function() {
   try {
-    var t = localStorage.getItem("dashboard.theme") || "system";
+    var t = localStorage.getItem("dashboard.theme") || "light";
     var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
     var dark = t === "dark" || (t === "system" && prefersDark);
     if (dark) document.documentElement.classList.add("dark");

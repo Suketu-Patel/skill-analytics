@@ -31,7 +31,10 @@ export const DEFAULT_PREFS: Prefs = {
   region: "auto",
   anonymize: false,
   paletteRecency: [],
-  theme: "system",
+  // Default to light so a fresh install doesn't render dark just
+  // because the user's OS is dark. Server-side default in prefs.js
+  // matches.
+  theme: "light",
 };
 
 // Module-level in-memory cache so the second mount (HMR, route change)

@@ -20,8 +20,11 @@ export const DEFAULT_PREFS = {
   paletteRecency: [],
   // Theme lives here AND in localStorage. The mirror in localStorage is
   // strictly for the pre-paint FOUC script — the source of truth on
-  // disk is this row.
-  theme: "system",
+  // disk is this row. Default is "light" so a fresh install doesn't
+  // surprise users with dark mode just because their OS happens to be
+  // in dark mode at install time. They can opt into "system" or "dark"
+  // from Settings → Appearance.
+  theme: "light",
 };
 
 export function getAllPrefs() {
