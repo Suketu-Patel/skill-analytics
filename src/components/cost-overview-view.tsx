@@ -30,6 +30,7 @@ type Headline = {
   spend_7d: number;
   spend_30d: number;
   sessions_total: number;
+  turns_total: number;
   active_days: number;
   tokens_input: number;
   tokens_cached: number;
@@ -59,13 +60,13 @@ type ByDay = {
   tokens_cached: number;
   tokens_output: number;
   tokens_reasoning: number;
-  sessions: number;
+  turns: number;
 };
 
 type ByModel = {
   source: string;
   model: string;
-  sessions: number;
+  turns: number;
   tokens_total: number;
   cost: number;
   pct_of_total: number;
@@ -74,13 +75,13 @@ type ByModel = {
 type ByProject = {
   cwd: string;
   cwd_short: string;
-  sessions: number;
+  turns: number;
   cost: number;
   tokens: number;
 };
 
-type ByHour = { hour: number; sessions: number; cost: number; tokens: number };
-type ByDow = { dow: number; label: string; sessions: number; cost: number };
+type ByHour = { hour: number; turns: number; cost: number; tokens: number };
+type ByDow = { dow: number; label: string; turns: number; cost: number };
 
 type TopSession = {
   turn_id: string;
@@ -92,6 +93,25 @@ type TopSession = {
   duration_ms: number | null;
   cost: number;
   tokens_total: number;
+};
+
+type SessionRow = {
+  session_id: string;
+  title: string;
+  source: string;
+  cwd: string;
+  cwd_short: string;
+  model: string;
+  started_at: string;
+  duration_min: number;
+  turns: number;
+  tokens_billable: number | null;
+  cost: number | null;
+};
+type SessionsPayload = {
+  ok: boolean;
+  list: SessionRow[];
+  totals: { sessions: number; sessions_with_cost: number };
 };
 
 type Burn = { day: string; cost: number; multiple: number };
@@ -279,9 +299,13 @@ export default function CostOverviewView({
   filterQS,
   onSelectRange,
   refreshNonce = 0,
+  costViewHint,
 }: {
   filterQS: string;
   onSelectRange?: (from: string, to: string) => void;
+  // Set by the ⌘K palette ("Most Expensive Sessions/Turns") to flip the
+  // toggle from outside. nonce makes repeat picks re-apply.
+  costViewHint?: { view: "sessions" | "turns"; n: number } | null;
   // Bumped by the parent after a successful sync. We refetch on change
   // but suppress the loading skeleton when we already have data — the
   // existing panels stay visible until the fresh payload arrives, then
@@ -293,6 +317,28 @@ export default function CostOverviewView({
   const [error, setError] = useState<string | null>(null);
   const [funFacts, setFunFacts] = useState<FunFacts | null>(null);
   const [funLoading, setFunLoading] = useState(false);
+  // "Most Expensive" panel can show whole conversations (sessions) or
+  // single exchanges (turns). Sessions is the default — it's what people
+  // actually mean by "which chat cost the most".
+  const [costView, setCostView] = useState<"sessions" | "turns">("sessions");
+  useEffect(() => {
+    if (costViewHint) setCostView(costViewHint.view);
+  }, [costViewHint]);
+  const [sessions, setSessions] = useState<SessionsPayload | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const url = `/api/metrics/sessions${filterQS ? `?${filterQS}` : ""}`;
+    fetchJson<SessionsPayload>(url)
+      .then((j) => {
+        if (!cancelled && j.ok) setSessions(j);
+      })
+      .catch(() => {
+        /* non-fatal: panel falls back to turns view */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filterQS, refreshNonce]);
   // Only the Daily Spend chart has a date X-axis. Hour-of-day and
   // Day-of-week are categorical buckets — a "drag to filter dates"
   // doesn't map onto them — so they don't get the brush.
@@ -413,7 +459,7 @@ export default function CostOverviewView({
     if (!data) return [];
     return data.byHour.map((b) => ({
       label: `${String(b.hour).padStart(2, "0")}h`,
-      sessions: b.sessions,
+      turns: b.turns,
       cost: Number(b.cost.toFixed(4)),
     }));
   }, [data]);
@@ -422,7 +468,7 @@ export default function CostOverviewView({
     if (!data) return [];
     return data.byDayOfWeek.map((b) => ({
       label: b.label,
-      sessions: b.sessions,
+      turns: b.turns,
       cost: Number(b.cost.toFixed(4)),
     }));
   }, [data]);
@@ -703,7 +749,7 @@ export default function CostOverviewView({
               <thead className="bg-white text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-3 py-2 text-left">Model</th>
-                  <th className="px-3 py-2 text-right">Sessions</th>
+                  <th className="px-3 py-2 text-right">Turns</th>
                   <th className="px-3 py-2 text-right">Tokens</th>
                   <th className="px-3 py-2 text-right">Spend</th>
                   <th className="px-3 py-2 text-right">%</th>
@@ -722,7 +768,7 @@ export default function CostOverviewView({
                       <span className="ml-2 text-xs uppercase text-slate-500">{m.source}</span>
                       <span className="ml-2 font-medium">{m.model}</span>
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{m.sessions}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{m.turns}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{tok(m.tokens_total)}</td>
                     <td className="px-3 py-2 text-right font-semibold tabular-nums">{usd(m.cost)}</td>
                     <td className="px-3 py-2 text-right text-xs tabular-nums text-slate-500">
@@ -747,7 +793,7 @@ export default function CostOverviewView({
               <thead className="bg-white text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-3 py-2 text-left">Project</th>
-                  <th className="px-3 py-2 text-right">Sessions</th>
+                  <th className="px-3 py-2 text-right">Turns</th>
                   <th className="px-3 py-2 text-right">Tokens</th>
                   <th className="px-3 py-2 text-right">Spend</th>
                 </tr>
@@ -758,7 +804,7 @@ export default function CostOverviewView({
                     <td className="px-3 py-2 font-mono text-xs" title={anonymize ? "" : p.cwd}>
                       {projLabel(p.cwd, p.cwd_short)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{p.sessions}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{p.turns}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{tok(p.tokens)}</td>
                     <td className="px-3 py-2 text-right font-semibold tabular-nums">{usd(p.cost)}</td>
                   </tr>
@@ -778,8 +824,8 @@ export default function CostOverviewView({
        * bubble and is one of two surfaces where "when do I burn the
        * most?" lands clearly. */}
       <div className="panel p-4">
-        <h2 id="hour-of-day" className="group text-lg font-semibold text-ink">Hour of Day (UTC)<PanelAnchor id="hour-of-day" /></h2>
-        <p className="text-xs text-slate-500">when sessions fire</p>
+        <h2 id="hour-of-day" className="group text-lg font-semibold text-ink">Hour of Day<PanelAnchor id="hour-of-day" /></h2>
+        <p className="text-xs text-slate-500">when turns fire (your local time)</p>
         <div className="mt-3 h-56">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={hourChart}>
@@ -791,25 +837,115 @@ export default function CostOverviewView({
                   name === "cost" ? usdPrecise(v) : v
                 }
               />
-              <Bar dataKey="sessions" fill="#0f8f8a" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="turns" fill="#0f8f8a" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
         <FactBubble fact={factForTokens} tone="violet" />
       </div>
 
-      {/* ─── top sessions ──────────────────────────────────────────── */}
+      {/* ─── most expensive: sessions (whole chats) or turns ───────── */}
       <div className="panel overflow-hidden">
         <div className="border-b border-line p-4">
-          <h2 id="top-sessions" className="group text-lg font-semibold text-ink">Most Expensive Sessions<PanelAnchor id="top-sessions" /></h2>
-          <p className="text-xs text-slate-500">single sessions ranked by spend</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="top-sessions" className="group text-lg font-semibold text-ink">
+                Most Expensive {costView === "sessions" ? "Sessions" : "Turns"}
+                <PanelAnchor id="top-sessions" />
+              </h2>
+              <p className="text-xs text-slate-500">
+                {costView === "sessions"
+                  ? "whole conversations ranked by spend"
+                  : "single request/response exchanges ranked by spend"}
+              </p>
+            </div>
+            <div className="flex shrink-0 overflow-hidden rounded-md border border-line text-xs">
+              {(["sessions", "turns"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setCostView(v)}
+                  className={`px-3 py-1.5 font-medium capitalize ${
+                    costView === v
+                      ? "bg-teal text-white"
+                      : "bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900"
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          </div>
           {factForSessions && (
             <div className="mt-2">
               <FactBubble fact={factForSessions} tone="teal" />
             </div>
           )}
         </div>
-        {data.topSessions.length === 0 ? (
+
+        {costView === "sessions" ? (
+          !sessions || sessions.list.length === 0 ? (
+            <div className="p-6 text-sm text-slate-500">
+              {sessions ? "No sessions." : "Loading sessions…"}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-white text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-900">
+                <tr>
+                  <th className="px-3 py-2 text-left">What it was about</th>
+                  <th className="px-3 py-2 text-left">Source</th>
+                  <th className="px-3 py-2 text-left">When</th>
+                  <th className="px-3 py-2 text-right">Duration</th>
+                  <th className="px-3 py-2 text-right">Turns</th>
+                  <th className="px-3 py-2 text-right">Tokens</th>
+                  <th className="px-3 py-2 text-right">Spend</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.list.map((s) => (
+                  <tr key={s.session_id} className="border-t border-line">
+                    <td
+                      className="max-w-[28rem] truncate px-3 py-2"
+                      title={`${s.title}${anonymize ? "" : `  ·  ${s.cwd}`}`}
+                    >
+                      {s.title}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{
+                          backgroundColor: SRC_COLOR[s.source as "claude" | "codex"] || "#8b5cf6",
+                        }}
+                      />
+                      <span className="ml-2 text-xs uppercase text-slate-500">{s.source}</span>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-slate-600">
+                      {shortTime(s.started_at)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+                      {s.duration_min
+                        ? s.duration_min < 60
+                          ? `${s.duration_min}m`
+                          : `${Math.floor(s.duration_min / 60)}h ${s.duration_min % 60}m`
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{s.turns}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+                      {s.tokens_billable == null ? "—" : tok(s.tokens_billable)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold tabular-nums">
+                      {s.cost == null ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        usd(s.cost)
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : data.topSessions.length === 0 ? (
           <div className="p-6 text-sm text-slate-500">No data</div>
         ) : (
           <table className="w-full text-sm">
@@ -852,8 +988,9 @@ export default function CostOverviewView({
         <p className="max-w-3xl">
           Spend computed by applying the model rate card in <code>src/lib/pricing.js</code> to the
           token sums in <code>token_usage</code>. Cache &quot;savings&quot; = what the cached input
-          would have cost at the fresh-input rate. UTC timestamps; hour-of-day reflects when the
-          message landed in the transcript, not your wall clock.
+          would have cost at the fresh-input rate. Hour-of-day and day-of-week use your machine&apos;s
+          local time, matching the Crazy tab. &quot;Sessions&quot; counts distinct conversations;
+          per-model / per-project / per-hour tables count turns.
         </p>
         <button
           type="button"

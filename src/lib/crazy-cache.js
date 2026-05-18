@@ -27,7 +27,13 @@ import {
 import { getUserSkillCounts } from "./metrics.js";
 
 const KIND = "crazy_snapshot";
-const SNAPSHOT_KEY = sha256("crazy:latest:v1");
+// v2 — strftime calls now use 'localtime' modifier (was UTC). Bumping
+// the key forces a recompute so users see hour buckets in their local
+// timezone instead of stale UTC numbers.
+// v3 — fixed token_usage JOIN fan-out in contextDegradationCurve and
+// removed sampling LIMITs in pepTalkIndex/aiFingerprint. Old snapshots
+// hold inflated/under-sampled numbers; bump to force a clean recompute.
+const SNAPSHOT_KEY = sha256("crazy:latest:v3");
 
 function nowIso() {
   return new Date().toISOString();

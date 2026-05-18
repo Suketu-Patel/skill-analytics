@@ -33,8 +33,8 @@ type CostHeadline = {
   source_sessions: { claude: number; codex: number };
   latest_day: string | null;
 };
-type ByModel = { source: string; model: string; sessions: number; tokens_total: number; cost: number; pct_of_total: number };
-type ByProject = { cwd: string; cwd_short: string; sessions: number; cost: number; tokens: number };
+type ByModel = { source: string; model: string; turns: number; tokens_total: number; cost: number; pct_of_total: number };
+type ByProject = { cwd: string; cwd_short: string; turns: number; cost: number; tokens: number };
 type Burn = { day: string; cost: number; multiple: number };
 
 type CostPayload = {
@@ -274,13 +274,13 @@ export default function WrappedView({
           accent="violet"
           label="Top model"
           big={topModel ? topModel.model : "n/a"}
-          sub={topModel ? `${usd(topModel.cost)} · ${topModel.sessions} sessions` : ""}
+          sub={topModel ? `${usd(topModel.cost)} · ${topModel.turns} turns` : ""}
         />
         <HighlightCard
           accent="amber"
           label="Top project"
           big={topProject ? projectLabel(topProject.cwd, topProject.cwd_short) : "n/a"}
-          sub={topProject ? `${usd(topProject.cost)} · ${topProject.sessions} sessions` : ""}
+          sub={topProject ? `${usd(topProject.cost)} · ${topProject.turns} turns` : ""}
           mono
         />
       </div>

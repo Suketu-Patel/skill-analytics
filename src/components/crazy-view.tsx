@@ -30,6 +30,7 @@ import {
   Repeat,
 } from "lucide-react";
 import { fetchJson } from "./fetch-json";
+import { useChartZoom, ZoomBadge } from "./use-chart-zoom";
 
 // ─── data shapes ────────────────────────────────────────────────────────
 
@@ -452,6 +453,8 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
   const worst = [...data.by_band].sort((a, b) => b.rate - a.rate)[0];
   const tone =
     worst && worst.rate >= 0.5 ? "coral" : worst && worst.rate >= 0.3 ? "violet" : "default";
+  const { zoomedData, chartProps, selectionOverlay, isZoomed, zoomRange, reset } =
+    useChartZoom(chart, "band");
   return (
     <Panel tone={tone}>
       <PanelHeader
@@ -459,11 +462,21 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
         title="Where the model loses you"
         takeaway={data.takeaway}
         tone={tone}
-        right={`peak ${worst?.band ?? "—"} at ${Math.round((worst?.rate || 0) * 100)}%`}
-        info="For every turn in a session, we add up tokens consumed so far. Then we check if you sent a 'no', 'wrong', 'actually', 'fix this', or similar message within 5 minutes after. We bucket turns by total tokens at that point and compute the correction rate per bucket. Rising line = longer sessions hurt your trust in the model."
+        right={
+          isZoomed && zoomRange ? (
+            <ZoomBadge from={zoomRange.from} to={zoomRange.to} onClear={reset} />
+          ) : (
+            `peak ${worst?.band ?? "—"} at ${Math.round((worst?.rate || 0) * 100)}%`
+          )
+        }
+        info="For every turn in a session, we add up tokens consumed so far. Then we check if you sent a 'no', 'wrong', 'actually', 'fix this', or similar message within 5 minutes after. We bucket turns by total tokens at that point and compute the correction rate per bucket. Rising line = longer sessions hurt your trust in the model. Drag across the chart to zoom into a token range."
       />
       <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={chart} margin={{ top: 10, right: 18, left: 0, bottom: 0 }}>
+        <LineChart
+          data={zoomedData}
+          margin={{ top: 10, right: 18, left: 0, bottom: 0 }}
+          {...chartProps}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis dataKey="band" tick={{ fontSize: 11 }} />
           <YAxis tick={{ fontSize: 11 }} unit="%" />
@@ -471,7 +484,6 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
             formatter={(v: number, _name, item) => [`${v}%`, `${item?.payload?.turns} turns`]}
             labelFormatter={(l: string) => `Cumulative tokens in session: ${l}`}
           />
-          {/* 30% reference line as a "things-are-getting-rough" marker */}
           <ReferenceLine y={30} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: "30%", position: "right", fontSize: 10, fill: "#64748b" }} />
           <Line
             type="monotone"
@@ -480,6 +492,7 @@ function ContextDegradation({ data }: { data: CrazyPayload["context_degradation"
             strokeWidth={2.5}
             dot={{ r: 5 }}
           />
+          {selectionOverlay()}
         </LineChart>
       </ResponsiveContainer>
     </Panel>
@@ -496,19 +509,31 @@ function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
     isPeak: b.hour === data.peak_hour,
   }));
   const overall = data.total_messages > 0 ? (data.total_frustrated / data.total_messages) * 100 : 0;
+  const { zoomedData, chartProps, selectionOverlay, isZoomed, zoomRange, reset } =
+    useChartZoom(chart, "hour");
   return (
     <Panel>
       <PanelHeader
         Icon={AlertTriangle}
         title="When you push back hardest"
         takeaway={data.takeaway}
-        right={`${overall.toFixed(1)}% baseline · ${data.total_frustrated.toLocaleString()} corrections in ${data.total_messages.toLocaleString()} msgs`}
-        info="We scan every user message for pushback words: 'no', 'wrong', 'actually', 'stop', 'undo', plus profanity ('fuck', 'wtf', 'ugh', etc.). Each message gets bucketed by the hour-of-day it was sent. Bar height = corrections divided by total messages that hour. The dashed baseline = your overall correction rate across all hours."
+        right={
+          isZoomed && zoomRange ? (
+            <ZoomBadge from={zoomRange.from} to={zoomRange.to} onClear={reset} />
+          ) : (
+            `${overall.toFixed(1)}% baseline · ${data.total_frustrated.toLocaleString()} corrections in ${data.total_messages.toLocaleString()} msgs`
+          )
+        }
+        info="We scan every user message for pushback words: 'no', 'wrong', 'actually', 'stop', 'undo', plus profanity ('fuck', 'wtf', 'ugh', etc.). Each message gets bucketed by the hour-of-day it was sent. Bar height = corrections divided by total messages that hour. The dashed baseline = your overall correction rate across all hours. Drag across the chart to zoom into a time-of-day window."
       />
       <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={chart} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <BarChart
+          data={zoomedData}
+          margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+          {...chartProps}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={zoomedData.length > 12 ? 1 : 0} />
           <YAxis tick={{ fontSize: 10 }} unit="%" />
           <Tooltip
             formatter={(v: number, _n, item) => [`${v}%`, `${item?.payload?.total} msgs`]}
@@ -521,10 +546,11 @@ function FrustrationCurve({ data }: { data: CrazyPayload["frustration"] }) {
             label={{ value: "baseline", position: "right", fontSize: 10, fill: "#64748b" }}
           />
           <Bar dataKey="rate" radius={[4, 4, 0, 0]}>
-            {chart.map((row) => (
+            {zoomedData.map((row) => (
               <Cell key={row.hour} fill={row.isPeak ? "#f43f5e" : "#fb7185"} />
             ))}
           </Bar>
+          {selectionOverlay()}
         </BarChart>
       </ResponsiveContainer>
     </Panel>
@@ -539,19 +565,31 @@ function DayNightCurve({ data }: { data: CrazyPayload["day_night"] }) {
     you: Math.round(b.frustration_rate * 1000) / 10,
     model: Math.round(b.fail_rate * 1000) / 10,
   }));
+  const { zoomedData, chartProps, selectionOverlay, isZoomed, zoomRange, reset } =
+    useChartZoom(chart, "hour");
   return (
     <Panel>
       <PanelHeader
         Icon={Moon}
         title="Day vs night: you and the model"
         takeaway={data.takeaway}
-        info="Two lines, same hour-of-day axis. Coral line = your frustration rate (% of your messages that contain pushback words). Teal line = tool-failure rate (% of AI tool calls that returned a non-zero exit code). Compare shapes: if both rise at night, late hours hurt both of you. If only one rises, tiredness and AI quality are decoupled."
-        right={`night vs day · you: ${data.day_avg.frustration > 0 ? Math.round(((data.night_avg.frustration - data.day_avg.frustration) / data.day_avg.frustration) * 100) : 0}% · model: ${data.day_avg.fail > 0 ? Math.round(((data.night_avg.fail - data.day_avg.fail) / data.day_avg.fail) * 100) : 0}%`}
+        info="Two lines, same hour-of-day axis. Coral line = your frustration rate (% of your messages that contain pushback words). Teal line = tool-failure rate (% of AI tool calls that returned a non-zero exit code). Compare shapes: if both rise at night, late hours hurt both of you. If only one rises, tiredness and AI quality are decoupled. Drag across the chart to zoom into a time-of-day window."
+        right={
+          isZoomed && zoomRange ? (
+            <ZoomBadge from={zoomRange.from} to={zoomRange.to} onClear={reset} />
+          ) : (
+            `night vs day · you: ${data.day_avg.frustration > 0 ? Math.round(((data.night_avg.frustration - data.day_avg.frustration) / data.day_avg.frustration) * 100) : 0}% · model: ${data.day_avg.fail > 0 ? Math.round(((data.night_avg.fail - data.day_avg.fail) / data.day_avg.fail) * 100) : 0}%`
+          )
+        }
       />
       <ResponsiveContainer width="100%" height={240}>
-        <LineChart data={chart} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+        <LineChart
+          data={zoomedData}
+          margin={{ top: 10, right: 16, left: 0, bottom: 0 }}
+          {...chartProps}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+          <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={zoomedData.length > 12 ? 1 : 0} />
           <YAxis tick={{ fontSize: 10 }} unit="%" />
           <Tooltip
             formatter={(v: number, name: string) => [`${v}%`, name === "you" ? "Your frustration" : "Tool failure"]}
@@ -559,6 +597,7 @@ function DayNightCurve({ data }: { data: CrazyPayload["day_night"] }) {
           />
           <Line type="monotone" dataKey="you" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="you" />
           <Line type="monotone" dataKey="model" stroke="#14b8a6" strokeWidth={2} dot={{ r: 3 }} name="model" />
+          {selectionOverlay()}
         </LineChart>
       </ResponsiveContainer>
       <div className="mt-2 flex items-center gap-4 text-[11px] text-slate-500">
@@ -574,60 +613,178 @@ function DayNightCurve({ data }: { data: CrazyPayload["day_night"] }) {
 }
 
 // ─── Swear-o-meter ─────────────────────────────────────────────────────
+//
+// Half-circle gauge with three colored arcs (amber → coral → rose) and a
+// needle whose angle is a weighted intensity score across the tiers.
+// Total in the center, mood label below, per-tier word pills at the
+// bottom so you still see *which* words triggered each tier.
 
 function SwearOMeter({ data }: { data: CrazyPayload["swear_o_meter"] }) {
-  const max = Math.max(1, ...data.tiers.map((t) => t.count));
-  const colorClass = (c: "amber" | "coral" | "rose") =>
+  const tierByName = Object.fromEntries(data.tiers.map((t) => [t.tier, t])) as Record<
+    "mild" | "medium" | "strong",
+    CrazyPayload["swear_o_meter"]["tiers"][number] | undefined
+  >;
+  const mild = tierByName.mild?.count || 0;
+  const medium = tierByName.medium?.count || 0;
+  const strong = tierByName.strong?.count || 0;
+  const total = data.total || mild + medium + strong;
+
+  // Weighted intensity score: mild counts a little, medium more, strong
+  // full weight. Divide by total to get 0..1, then map onto the half
+  // circle's -90°..+90° sweep (so 0 = needle far left, 1 = far right).
+  const intensity = total > 0 ? (mild * 0.15 + medium * 0.55 + strong * 1) / total : 0;
+  const clamped = Math.max(0, Math.min(1, intensity));
+
+  // Mood label + accent color picked from the same zones the arc paints.
+  let mood = "calm";
+  let moodColor = "#94a3b8";
+  if (clamped >= 0.66) {
+    mood = "unhinged";
+    moodColor = "#f43f5e";
+  } else if (clamped >= 0.33) {
+    mood = "heated";
+    moodColor = "#fb7185";
+  } else if (clamped > 0) {
+    mood = "edgy";
+    moodColor = "#f59e0b";
+  }
+
+  // SVG arc geometry — half circle, 200x110 viewport, center at (100,100).
+  const cx = 100;
+  const cy = 100;
+  const r = 78;
+  const arcPath = (startDeg: number, endDeg: number) => {
+    const toRad = (d: number) => ((d - 180) * Math.PI) / 180;
+    const sx = cx + r * Math.cos(toRad(startDeg));
+    const sy = cy + r * Math.sin(toRad(startDeg));
+    const ex = cx + r * Math.cos(toRad(endDeg));
+    const ey = cy + r * Math.sin(toRad(endDeg));
+    return `M ${sx} ${sy} A ${r} ${r} 0 0 1 ${ex} ${ey}`;
+  };
+  const needleAngle = clamped * 180; // 0..180 degrees across the arc
+  const needleRad = ((needleAngle - 180) * Math.PI) / 180;
+  const nx = cx + (r - 6) * Math.cos(needleRad);
+  const ny = cy + (r - 6) * Math.sin(needleRad);
+
+  const colorPillClass = (c: "amber" | "coral" | "rose") =>
     c === "amber"
-      ? { bar: "bg-amber", text: "text-amber", soft: "bg-amber/10 border-amber/30" }
+      ? "text-amber"
       : c === "coral"
-        ? { bar: "bg-coral", text: "text-coral", soft: "bg-coral/10 border-coral/30" }
-        : { bar: "bg-rose-500", text: "text-rose-500", soft: "bg-rose-500/10 border-rose-500/30" };
+        ? "text-coral"
+        : "text-rose-500";
+
   return (
     <Panel>
       <PanelHeader
         Icon={Flame}
         title="Swear-o-meter"
         takeaway={data.takeaway}
-        right={`${data.total.toLocaleString()} total hits`}
-        info="We scan every user message for profanity and frustration lemmas, grouped by tier. Mild grumble = 'ugh', 'jesus', 'come on'. Real complaint = 'wtf', 'crap', 'bullshit'. Full f-bomb = 'fuck', 'shit'. Skips machine-generated wrappers (system reminders, image markers, transcripts) so only your typed swearing counts."
+        right={`${total.toLocaleString()} total hits`}
+        info="We scan every user message for profanity and frustration lemmas, grouped by tier. Mild grumble = 'ugh', 'jesus', 'come on'. Real complaint = 'wtf', 'crap', 'bullshit'. Full f-bomb = 'fuck', 'shit'. Needle angle = weighted intensity (mild 15%, medium 55%, strong 100%) across all your swears, so 100 mild grumbles ≠ 100 f-bombs."
       />
-      <div className="flex flex-col gap-3">
-        {data.tiers.map((t) => {
-          const c = colorClass(t.color);
-          const width = (t.count / max) * 100;
-          return (
-            <div key={t.tier} className={`rounded-md border p-3 ${c.soft}`}>
-              <div className="mb-1.5 flex items-baseline justify-between gap-2">
-                <span className={`text-xs font-semibold uppercase tracking-wider ${c.text}`}>
+      <div className="flex flex-col items-center gap-4">
+        {/* The gauge. The needle sweeps through the dial center, so the
+            numeric readout lives BELOW the arc, never on the axis. */}
+        <div className="w-full max-w-[320px]">
+          <svg viewBox="0 0 200 120" className="w-full">
+            {/* track */}
+            <path
+              d={arcPath(0, 180)}
+              fill="none"
+              stroke="#e5e7eb"
+              strokeWidth={14}
+              strokeLinecap="butt"
+            />
+            {/* amber zone 0..60° */}
+            <path
+              d={arcPath(0, 60)}
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth={14}
+              strokeLinecap="butt"
+            />
+            {/* coral zone 60..120° */}
+            <path
+              d={arcPath(60, 120)}
+              fill="none"
+              stroke="#fb7185"
+              strokeWidth={14}
+              strokeLinecap="butt"
+            />
+            {/* rose zone 120..180° */}
+            <path
+              d={arcPath(120, 180)}
+              fill="none"
+              stroke="#f43f5e"
+              strokeWidth={14}
+              strokeLinecap="butt"
+            />
+            {/* needle */}
+            <line
+              x1={cx}
+              y1={cy}
+              x2={nx}
+              y2={ny}
+              stroke="#0f172a"
+              strokeWidth={3}
+              strokeLinecap="round"
+            />
+            <circle cx={cx} cy={cy} r={6} fill="#0f172a" />
+            {/* zone tick labels — sit under the dial, clear of the needle */}
+            <text x={14} y={118} fontSize="9" fill="#94a3b8" textAnchor="start">
+              calm
+            </text>
+            <text x={186} y={118} fontSize="9" fill="#94a3b8" textAnchor="end">
+              unhinged
+            </text>
+          </svg>
+        </div>
+
+        {/* Numeric readout — below the dial so the needle never crosses it */}
+        <div className="-mt-2 flex flex-col items-center">
+          <div className="text-4xl font-bold tabular-nums text-ink">
+            {total.toLocaleString()}
+          </div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-slate-400">
+            total swears ·{" "}
+            <span className="font-semibold" style={{ color: moodColor }}>
+              {mood}
+            </span>
+          </div>
+        </div>
+
+        {/* Per-tier word pills, compact row layout */}
+        <div className="grid w-full gap-3 sm:grid-cols-3">
+          {data.tiers.map((t) => (
+            <div key={t.tier} className="rounded-md border border-line p-2">
+              <div className="mb-1 flex items-baseline justify-between gap-2">
+                <span
+                  className={`text-[10px] font-semibold uppercase tracking-wider ${colorPillClass(t.color)}`}
+                >
                   {t.label}
                 </span>
-                <span className="text-xs tabular-nums text-slate-500">
-                  {t.count.toLocaleString()} hits
+                <span className="text-[10px] tabular-nums text-slate-500">
+                  {t.count.toLocaleString()}
                 </span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-white/60 dark:bg-slate-800">
-                <div
-                  className={`h-full rounded-full ${c.bar} transition-all`}
-                  style={{ width: `${width}%` }}
-                />
-              </div>
-              {t.words.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-                  {t.words.map((w) => (
+              {t.words.length === 0 ? (
+                <p className="text-[11px] italic text-slate-400">none</p>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {t.words.slice(0, 8).map((w) => (
                     <span
                       key={w.word}
-                      className="inline-flex items-baseline gap-1 rounded-md border border-line bg-white px-2 py-0.5 font-mono dark:bg-slate-900"
+                      className="inline-flex items-baseline gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:bg-slate-800"
                     >
-                      <span className={c.text}>&ldquo;{w.word}&rdquo;</span>
+                      <span className={colorPillClass(t.color)}>{w.word}</span>
                       <span className="tabular-nums text-slate-500">×{w.count}</span>
                     </span>
                   ))}
                 </div>
               )}
             </div>
-          );
-        })}
+          ))}
+        </div>
       </div>
     </Panel>
   );

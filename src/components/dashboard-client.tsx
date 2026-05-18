@@ -571,6 +571,12 @@ export default function DashboardClient() {
   // detailed table; Errors is the failures stream; Pricing is the cost
   // breakdown per skill.
   const [skillsSubtab, setSkillsSubtab] = useState<"top" | "health" | "errors" | "pricing">("top");
+  // Lets the ⌘K palette flip the Cost tab's Most-Expensive Sessions⇄Turns
+  // toggle. nonce so picking the same option twice still re-applies.
+  const [costViewHint, setCostViewHint] = useState<{
+    view: "sessions" | "turns";
+    n: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string>("");
@@ -1215,7 +1221,6 @@ export default function DashboardClient() {
       "spend-by-model": ["model", "opus", "sonnet", "haiku", "gpt"],
       "spend-by-project": ["project", "cwd", "folder"],
       "hour-of-day": ["time", "hour", "when", "schedule"],
-      "top-sessions": ["session", "expensive", "biggest"],
     };
     (Object.entries(ANCHOR_KW) as [string, string[]][]).forEach(([anchor, kws]) => {
       const labelMap: Record<string, string> = {
@@ -1226,7 +1231,6 @@ export default function DashboardClient() {
         "spend-by-model": "Cost: Spend by Model",
         "spend-by-project": "Cost: Spend by Project",
         "hour-of-day": "Cost: Hour of Day",
-        "top-sessions": "Cost: Most Expensive Sessions",
       };
       items.push({
         id: `anchor-${anchor}`,
@@ -1243,6 +1247,34 @@ export default function DashboardClient() {
         },
       });
     });
+
+    // — Cost tab's Most-Expensive panel: jump AND set the Sessions⇄Turns
+    //   toggle. Two entries so the palette mirrors the in-page control.
+    const jumpExpensive = (view: "sessions" | "turns") => {
+      setActive("cost");
+      setCostViewHint({ view, n: Date.now() });
+      window.setTimeout(() => {
+        const el = document.getElementById("top-sessions");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        history.replaceState(null, "", "#top-sessions");
+      }, 80);
+    };
+    items.push(
+      {
+        id: "anchor-top-sessions",
+        group: "Panel",
+        label: "Cost: Most Expensive Sessions",
+        keywords: ["jump", "scroll", "panel", "cost", "session", "conversation", "expensive", "biggest", "what was it about"],
+        onPick: () => jumpExpensive("sessions"),
+      },
+      {
+        id: "anchor-top-turns",
+        group: "Panel",
+        label: "Cost: Most Expensive Turns",
+        keywords: ["jump", "scroll", "panel", "cost", "turn", "exchange", "expensive", "biggest"],
+        onPick: () => jumpExpensive("turns"),
+      }
+    );
 
     // — Top-level actions worth surfacing on common typed words.
     items.push(
@@ -1784,7 +1816,7 @@ export default function DashboardClient() {
       )}
 
       {active === "cost" && (
-        <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} refreshNonce={refreshNonce} />
+        <CostOverviewView filterQS={filterQS} onSelectRange={handleChartDateSelect} refreshNonce={refreshNonce} costViewHint={costViewHint} />
       )}
       {active === "wrapped" && (
         <WrappedView

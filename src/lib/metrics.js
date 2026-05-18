@@ -369,7 +369,7 @@ export function getInsights(opts = {}) {
   `);
 
   const hourlyActivity = queryRows(`
-    SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour,
+    SELECT CAST(strftime('%H', timestamp, 'localtime') AS INTEGER) AS hour,
            COUNT(*) AS events
     FROM skill_events se
     WHERE timestamp IS NOT NULL ${andFilter(opts, "se")}
@@ -575,7 +575,7 @@ export function getComparisonMetrics(opts = {}) {
 
     // Hourly cadence — useful to see when each tool is actually used.
     const hourly = queryRows(`
-      SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour, COUNT(*) AS events
+      SELECT CAST(strftime('%H', timestamp, 'localtime') AS INTEGER) AS hour, COUNT(*) AS events
       FROM skill_events
       WHERE source = ${sqlString(src)} AND timestamp IS NOT NULL${fromAnd}${toAnd}
       GROUP BY hour ORDER BY hour ASC
@@ -787,9 +787,10 @@ export function getCostOverview(opts = {}) {
     SELECT
       tu.timestamp AS ts,
       substr(tu.timestamp, 1, 10) AS day,
-      strftime('%H', tu.timestamp) AS hour,
-      strftime('%w', tu.timestamp) AS dow,
+      strftime('%H', tu.timestamp, 'localtime') AS hour,
+      strftime('%w', tu.timestamp, 'localtime') AS dow,
       tu.turn_id AS turn_id,
+      t.session_id AS session_id,
       tu.source AS source,
       COALESCE(t.model, '(unknown)') AS model,
       COALESCE(t.cwd, '(unknown)') AS cwd,
@@ -815,6 +816,7 @@ export function getCostOverview(opts = {}) {
       hour: Number(r.hour),
       dow: Number(r.dow),
       turn_id: r.turn_id,
+      session_id: r.session_id,
       source: r.source,
       model: r.model,
       cwd: r.cwd,
@@ -847,7 +849,7 @@ export function getCostOverview(opts = {}) {
       tokens_cached: 0,
       tokens_output: 0,
       tokens_reasoning: 0,
-      sessions: new Set(),
+      turns: new Set(),
     };
     d.cost += r.cost;
     d.cost_input += r.input_cost;
@@ -857,11 +859,11 @@ export function getCostOverview(opts = {}) {
     d.tokens_cached += r.cached_input_tokens;
     d.tokens_output += r.output_tokens;
     d.tokens_reasoning += r.reasoning_output_tokens;
-    if (r.turn_id) d.sessions.add(r.turn_id);
+    if (r.turn_id) d.turns.add(r.turn_id);
     byDayMap.set(r.day, d);
   }
   const byDay = [...byDayMap.values()]
-    .map((d) => ({ ...d, sessions: d.sessions.size }))
+    .map((d) => ({ ...d, turns: d.turns.size }))
     .sort((a, b) => a.day.localeCompare(b.day));
 
   // ─── slice 2: by-model (source-aware) ──────────────────────────────────
@@ -871,11 +873,11 @@ export function getCostOverview(opts = {}) {
     const m = byModelMap.get(key) || {
       source: r.source,
       model: r.model,
-      sessions: new Set(),
+      turns: new Set(),
       tokens_total: 0,
       cost: 0,
     };
-    m.sessions.add(r.turn_id);
+    m.turns.add(r.turn_id);
     m.tokens_total += r.fresh_input_tokens + r.cached_input_tokens + r.output_tokens + r.reasoning_output_tokens;
     m.cost += r.cost;
     byModelMap.set(key, m);
@@ -885,7 +887,7 @@ export function getCostOverview(opts = {}) {
     .map((m) => ({
       source: m.source,
       model: m.model,
-      sessions: m.sessions.size,
+      turns: m.turns.size,
       tokens_total: m.tokens_total,
       cost: m.cost,
       pct_of_total: totalSpend > 0 ? (m.cost / totalSpend) * 100 : 0,
@@ -898,40 +900,40 @@ export function getCostOverview(opts = {}) {
     const m = byProjectMap.get(r.cwd) || {
       cwd: r.cwd,
       cwd_short: safeBasename(r.cwd),
-      sessions: new Set(),
+      turns: new Set(),
       cost: 0,
       tokens: 0,
     };
-    m.sessions.add(r.turn_id);
+    m.turns.add(r.turn_id);
     m.cost += r.cost;
     m.tokens += r.fresh_input_tokens + r.cached_input_tokens + r.output_tokens + r.reasoning_output_tokens;
     byProjectMap.set(r.cwd, m);
   }
   const byProject = [...byProjectMap.values()]
-    .map((m) => ({ ...m, sessions: m.sessions.size }))
+    .map((m) => ({ ...m, turns: m.turns.size }))
     .filter((m) => m.cost > 0)
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 15);
 
-  // ─── slice 4: by-hour (0–23, UTC; user works in roughly one TZ so this
-  //                       still surfaces daily rhythm) ─────────────────────
+  // ─── slice 4: by-hour (0–23, server local time so it matches the
+  //   Crazy tab and the user's actual clock) ──────────────────────────────
   const hourBuckets = Array.from({ length: 24 }, (_, h) => ({
     hour: h,
-    sessions: new Set(),
+    turns: new Set(),
     cost: 0,
     tokens: 0,
   }));
   for (const r of priced) {
     if (Number.isInteger(r.hour) && r.hour >= 0 && r.hour < 24) {
       const b = hourBuckets[r.hour];
-      b.sessions.add(r.turn_id);
+      b.turns.add(r.turn_id);
       b.cost += r.cost;
       b.tokens += r.fresh_input_tokens + r.output_tokens;
     }
   }
   const byHour = hourBuckets.map((b) => ({
     hour: b.hour,
-    sessions: b.sessions.size,
+    turns: b.turns.size,
     cost: b.cost,
     tokens: b.tokens,
   }));
@@ -941,20 +943,20 @@ export function getCostOverview(opts = {}) {
   const dowBuckets = Array.from({ length: 7 }, (_, d) => ({
     dow: d,
     label: dowNames[d],
-    sessions: new Set(),
+    turns: new Set(),
     cost: 0,
   }));
   for (const r of priced) {
     if (Number.isInteger(r.dow) && r.dow >= 0 && r.dow < 7) {
       const b = dowBuckets[r.dow];
-      b.sessions.add(r.turn_id);
+      b.turns.add(r.turn_id);
       b.cost += r.cost;
     }
   }
   const byDayOfWeek = dowBuckets.map((b) => ({
     dow: b.dow,
     label: b.label,
-    sessions: b.sessions.size,
+    turns: b.turns.size,
     cost: b.cost,
   }));
 
@@ -964,6 +966,7 @@ export function getCostOverview(opts = {}) {
     if (!r.turn_id) continue;
     const s = bySessionMap.get(r.turn_id) || {
       turn_id: r.turn_id,
+      session_id: r.session_id,
       source: r.source,
       model: r.model,
       cwd: r.cwd,
@@ -1043,9 +1046,16 @@ export function getCostOverview(opts = {}) {
   // billable tokens (fresh input + output + reasoning) per source so the
   // Wrapped cards don't have to derive them from comparison's
   // total_tokens (which leaks cached tokens into the headline number).
+  // Real conversation sessions = distinct session_id (from turns), not
+  // distinct turn_id. token_usage has no session_id, so we read it off
+  // the joined turns row. Falls back to turn_id only when a usage row
+  // has no matching turn (orphan), so a session is never undercounted to
+  // zero. Headline + per-source split report sessions; the per-turn
+  // breakdown tables report turns.
   const sourceTotals = { claude: 0, codex: 0 };
   const sourceBillableTokens = { claude: 0, codex: 0 };
   const sourceSessions = { claude: new Set(), codex: new Set() };
+  const allSessions = new Set();
   for (const r of priced) {
     sourceTotals[r.source] = (sourceTotals[r.source] || 0) + r.cost;
     sourceBillableTokens[r.source] =
@@ -1053,12 +1063,18 @@ export function getCostOverview(opts = {}) {
       r.fresh_input_tokens +
       r.output_tokens +
       r.reasoning_output_tokens;
-    if (r.turn_id) sourceSessions[r.source].add(r.turn_id);
+    const sid = r.session_id || (r.turn_id ? `turn:${r.turn_id}` : null);
+    if (sid) {
+      allSessions.add(sid);
+      if (sourceSessions[r.source]) sourceSessions[r.source].add(sid);
+    }
   }
   const sourceSessionCounts = {
     claude: sourceSessions.claude.size,
     codex: sourceSessions.codex.size,
   };
+  const sessionsTotal = allSessions.size;
+  const turnsTotal = bySessionMap.size;
 
   return {
     headline: {
@@ -1066,7 +1082,8 @@ export function getCostOverview(opts = {}) {
       spend_today: spendToday,
       spend_7d: spend7d,
       spend_30d: spend30d,
-      sessions_total: bySessionMap.size,
+      sessions_total: sessionsTotal,
+      turns_total: turnsTotal,
       active_days: byDay.filter((d) => d.cost > 0).length,
       tokens_input: totalFreshInput,
       tokens_cached: totalCachedTokens,
@@ -1082,7 +1099,7 @@ export function getCostOverview(opts = {}) {
       tokens_total: totalFreshInput + totalCachedTokens + totalOutput + totalReasoning,
       cache_hit_rate: cacheHitRate,
       cache_savings: totalSaved,
-      avg_session_cost: bySessionMap.size > 0 ? totalSpend / bySessionMap.size : 0,
+      avg_session_cost: sessionsTotal > 0 ? totalSpend / sessionsTotal : 0,
       most_expensive_day: mostExpensiveDay
         ? { day: mostExpensiveDay.day, cost: mostExpensiveDay.cost }
         : null,
@@ -1102,5 +1119,264 @@ export function getCostOverview(opts = {}) {
     byDayOfWeek,
     topSessions,
     burnAlerts,
+  };
+}
+
+/**
+ * Per-conversation rollup. A "session" = one whole conversation
+ * (session_id), as opposed to a "turn" = one request/response exchange
+ * inside it. Codex logs many turns per session; Claude collapses a
+ * conversation into one turn-row. Either way session_id is the stable
+ * conversation key.
+ *
+ * Cost/tokens are priced through the same pricing.js path as the Cost
+ * tab (fresh input, not Codex's cumulative input), so Claude and Codex
+ * sessions are comparable in real dollars.
+ *
+ * Source-complete: the base table is `turns`, so EVERY conversation
+ * shows up regardless of source — Claude, Codex, AND Cursor. token_usage
+ * is LEFT-joined for cost. Cursor logs no token data, so Cursor sessions
+ * carry `cost: null` (the UI renders "—") instead of being dropped. A
+ * Cursor-only user still sees their full session list, ranked by
+ * activity, with cost honestly blank rather than a fake $0.
+ */
+export function getSessions(opts = {}) {
+  const filters = ["t.session_id IS NOT NULL"];
+  if (opts?.project) filters.push(`t.cwd = ${sqlString(opts.project)}`);
+  if (opts?.source && opts.source !== "all") {
+    filters.push(`t.source = ${sqlString(String(opts.source).toLowerCase())}`);
+  }
+  const rows = queryRows(`
+    SELECT
+      t.session_id AS session_id,
+      t.source AS source,
+      COALESCE(t.cwd, '(unknown)') AS cwd,
+      COALESCE(t.model, '(unknown)') AS model,
+      t.started_at AS started_at,
+      t.completed_at AS completed_at,
+      t.source_path AS source_path,
+      t.turn_id AS turn_id,
+      tu.event_key AS tu_key,
+      tu.source AS price_source,
+      COALESCE(tu.input_tokens, 0) AS input_tokens,
+      COALESCE(tu.cached_input_tokens, 0) AS cached_input_tokens,
+      COALESCE(tu.output_tokens, 0) AS output_tokens,
+      COALESCE(tu.reasoning_output_tokens, 0) AS reasoning_output_tokens
+    FROM turns t
+    LEFT JOIN token_usage tu ON tu.turn_id = t.turn_id
+    WHERE ${filters.join(" AND ")}
+  `);
+
+  const map = new Map();
+  for (const r of rows) {
+    let s = map.get(r.session_id);
+    if (!s) {
+      s = {
+        session_id: r.session_id,
+        source: r.source,
+        cwd: r.cwd,
+        cwd_short: safeBasename(r.cwd),
+        model: r.model,
+        source_path: r.source_path || null,
+        started_at: r.started_at,
+        ended_at: r.completed_at || r.started_at,
+        turns: new Set(),
+        tokens_billable: 0,
+        cost: 0,
+        has_cost: false,
+      };
+      map.set(r.session_id, s);
+    }
+    if (r.started_at && (!s.started_at || r.started_at < s.started_at)) {
+      s.started_at = r.started_at;
+    }
+    const endCandidate = r.completed_at || r.started_at;
+    if (endCandidate && (!s.ended_at || endCandidate > s.ended_at)) {
+      s.ended_at = endCandidate;
+    }
+    if (r.model && r.model !== "(unknown)") s.model = r.model;
+    if (r.turn_id) s.turns.add(r.turn_id);
+    // tu_key present => this turn had a real token_usage row. Price it.
+    if (r.tu_key) {
+      const c = computeCost(r.price_source, r.model, r);
+      s.tokens_billable += c.fresh_input_tokens + r.output_tokens + r.reasoning_output_tokens;
+      s.cost += c.cost;
+      s.has_cost = true;
+    }
+  }
+
+  // ── Title resolution: what was this conversation ABOUT ──────────────
+  // Priority: (1) Claude Code's own ai-title event (a real topic like
+  // "Design skill performance monitoring system"), keyed by sessionId;
+  // (2) the first genuine user message (skipping command/system
+  // wrappers), keyed by the session's transcript file; (3) cwd folder.
+  const sessionIds = [...map.keys()];
+  const titleBySession = new Map();
+  if (sessionIds.length) {
+    const aiTitles = queryRows(`
+      SELECT raw_json FROM raw_events WHERE event_type = 'ai-title'
+    `);
+    for (const row of aiTitles) {
+      try {
+        const j = JSON.parse(row.raw_json);
+        const sid = j.sessionId || j.session_id;
+        const title = (j.aiTitle || j.title || "").trim();
+        if (sid && title && map.has(sid)) titleBySession.set(sid, title);
+      } catch {
+        /* skip unparseable */
+      }
+    }
+  }
+
+  // First real user message per transcript file (cheap: only the first
+  // ~60 lines, where the opening prompt always lives). Cursor sessions
+  // all share one DB file, so first-message-by-file is meaningless for
+  // them — they fall through to the folder label.
+  const NOISE_RE =
+    /^\s*<local-command|^\s*<command-(name|message|args|caveat)|^\s*<system-reminder|^\s*<task-notification|^\s*\[Request interrupted|Caveat: The messages below were generated|^\s*Base directory for this skill:|AUTO-GENERATED from SKILL\.md|^\s*\[Image|^\s*\[Pasted text/i;
+  function firstUserText(rawJson) {
+    let j;
+    try {
+      j = JSON.parse(rawJson);
+    } catch {
+      return "";
+    }
+    // Codex: {payload:{type:"user_message",message:"..."}}
+    if (j.payload?.message && typeof j.payload.message === "string") {
+      return j.payload.message;
+    }
+    // Claude: {message:{content:[{type:"text",text:"..."}]}} or string
+    const c = j.message?.content;
+    if (typeof c === "string") return c;
+    if (Array.isArray(c)) {
+      if (c.some((p) => p?.type === "tool_result")) return "";
+      return c
+        .filter((p) => p?.type === "text" && typeof p.text === "string")
+        .map((p) => p.text)
+        .join(" ");
+    }
+    return "";
+  }
+  const firstMsgByPath = new Map();
+  const needPaths = new Set(
+    [...map.values()].filter((s) => s.source !== "cursor" && s.source_path).map((s) => s.source_path)
+  );
+  if (needPaths.size) {
+    const msgRows = queryRows(`
+      SELECT source_path, source_line, raw_json
+      FROM raw_events
+      WHERE (payload_type IN ('user_message', 'user') OR event_type = 'user')
+        AND source_line <= 400
+      ORDER BY source_path, source_line
+    `);
+    for (const row of msgRows) {
+      if (!needPaths.has(row.source_path)) continue;
+      if (firstMsgByPath.has(row.source_path)) continue;
+      const text = firstUserText(row.raw_json).replace(/\s+/g, " ").trim();
+      if (!text || NOISE_RE.test(text)) continue;
+      firstMsgByPath.set(
+        row.source_path,
+        text.length > 80 ? `${text.slice(0, 80)}…` : text
+      );
+    }
+  }
+
+  const sessions = [...map.values()]
+    .map((s) => {
+      const title =
+        titleBySession.get(s.session_id) ||
+        (s.source !== "cursor" && s.source_path
+          ? firstMsgByPath.get(s.source_path)
+          : null) ||
+        s.cwd_short;
+      const start = new Date(s.started_at).getTime();
+      const end = new Date(s.ended_at).getTime();
+      const durationMin =
+        Number.isFinite(start) && Number.isFinite(end) && end >= start
+          ? Math.round((end - start) / 60000)
+          : 0;
+      return {
+        session_id: s.session_id,
+        title,
+        source: s.source,
+        cwd: s.cwd,
+        cwd_short: s.cwd_short,
+        model: s.model,
+        started_at: s.started_at,
+        ended_at: s.ended_at,
+        duration_min: durationMin,
+        turns: s.turns.size,
+        // null (not 0) when the source logs no tokens — UI shows "—".
+        tokens_billable: s.has_cost ? s.tokens_billable : null,
+        cost: s.has_cost ? s.cost : null,
+      };
+    })
+    // Cost-bearing sessions first (desc); cost-less ones (Cursor) after,
+    // ordered by activity so a Cursor-only user still gets a useful rank.
+    .sort((a, b) => {
+      const ac = a.cost == null ? -1 : a.cost;
+      const bc = b.cost == null ? -1 : b.cost;
+      if (bc !== ac) return bc - ac;
+      return b.duration_min - a.duration_min;
+    });
+
+  const costed = sessions.filter((s) => s.cost != null);
+  const totalCost = costed.reduce((a, s) => a + s.cost, 0);
+  const costs = costed.map((s) => s.cost).sort((a, b) => a - b);
+  const medianCost = costs.length ? costs[Math.floor(costs.length / 2)] : 0;
+
+  // Spend-over-time: cost by the day each session started (cost-bearing
+  // only — a flat $0 Cursor line would just be noise on this chart).
+  const byDayMap = new Map();
+  for (const s of costed) {
+    const day = (s.started_at || "").slice(0, 10);
+    if (!day) continue;
+    const d = byDayMap.get(day) || { day, cost: 0, sessions: 0 };
+    d.cost += s.cost;
+    d.sessions += 1;
+    byDayMap.set(day, d);
+  }
+  const byDay = [...byDayMap.values()].sort((a, b) => a.day.localeCompare(b.day));
+
+  // Per-source rollup INCLUDING cost-less sources, so a Cursor user sees
+  // their session count even with no spend. cost null when none.
+  const bySourceMap = new Map();
+  for (const s of sessions) {
+    const b =
+      bySourceMap.get(s.source) ||
+      { source: s.source, sessions: 0, cost: 0, sessions_with_cost: 0 };
+    b.sessions += 1;
+    if (s.cost != null) {
+      b.cost += s.cost;
+      b.sessions_with_cost += 1;
+    }
+    bySourceMap.set(s.source, b);
+  }
+  const bySource = [...bySourceMap.values()]
+    .map((b) => ({
+      source: b.source,
+      sessions: b.sessions,
+      sessions_with_cost: b.sessions_with_cost,
+      cost: b.sessions_with_cost > 0 ? b.cost : null,
+    }))
+    .sort((a, b) => b.sessions - a.sessions);
+
+  return {
+    totals: {
+      sessions: sessions.length,
+      sessions_with_cost: costed.length,
+      total_cost: totalCost,
+      avg_cost: costed.length ? totalCost / costed.length : 0,
+      median_cost: medianCost,
+      most_expensive: costed[0]
+        ? { session_id: costed[0].session_id, cost: costed[0].cost }
+        : null,
+    },
+    // Bar chart / headline: cost-bearing top 15 only.
+    top: costed.slice(0, 15),
+    // Table: top 40 across ALL sources so Cursor sessions are visible.
+    list: sessions.slice(0, 40),
+    byDay,
+    bySource,
   };
 }

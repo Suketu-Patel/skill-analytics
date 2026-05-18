@@ -5,3 +5,6 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 .env*.local
 .gstack/
+
+# build artifact
+tsconfig.tsbuildinfo

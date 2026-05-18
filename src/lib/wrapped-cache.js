@@ -15,7 +15,10 @@ import {
 const KIND = "wrapped_snapshot";
 // One canonical row keyed "latest" — we only care about the most recent
 // snapshot. Older snapshots get overwritten via INSERT OR REPLACE.
-const SNAPSHOT_KEY = sha256("wrapped:latest:v1");
+// v2 — cost_overview payload reshaped: real session_id sessions_total +
+// avg_session_cost, per-turn breakdowns renamed sessions→turns, hour/dow
+// now local time. Bump so stale wrapped snapshots are discarded.
+const SNAPSHOT_KEY = sha256("wrapped:latest:v2");
 
 function nowIso() {
   return new Date().toISOString();

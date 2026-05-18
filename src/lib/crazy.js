@@ -375,13 +375,18 @@ export function costPerLOCKept(limit = 12) {
 // correction-rate per band. Reveals at what context length the model's
 // answers stop landing for you.
 export function contextDegradationCurve() {
+  // token_usage holds one row PER LLM call within a turn (a heavy turn
+  // can have 1000s). Aggregate to one row per turn BEFORE ordering, or
+  // the LEFT JOIN fans out: turns get counted once per usage event,
+  // cumulative tokens explode, and a few mega-turns swamp every band.
   const turns = queryRows(`
     SELECT t.turn_id, t.session_id, t.started_at, t.source,
-           COALESCE(tu.input_tokens,0) + COALESCE(tu.output_tokens,0)
-             + COALESCE(tu.reasoning_output_tokens,0) AS toks
+           COALESCE(SUM(tu.input_tokens),0) + COALESCE(SUM(tu.output_tokens),0)
+             + COALESCE(SUM(tu.reasoning_output_tokens),0) AS toks
     FROM turns t
     LEFT JOIN token_usage tu ON tu.turn_id = t.turn_id
     WHERE t.session_id IS NOT NULL AND t.started_at IS NOT NULL
+    GROUP BY t.turn_id, t.session_id, t.started_at, t.source
     ORDER BY t.session_id, t.started_at
   `);
   const userMsgs = queryRows(`
@@ -590,12 +595,14 @@ export function pepTalkIndex() {
     return t != null && t - start < 5 * 60 * 1000;
   }
 
+  // Full scan: a LIMIT here biases the rate to whatever prefix the
+  // engine returns and makes total_assistant_msgs understate the corpus
+  // (it's a denominator the UI shows verbatim).
   const rows = queryRows(`
     SELECT timestamp, raw_json, source
     FROM raw_events
     WHERE payload_type = 'assistant' OR event_type = 'assistant'
     ORDER BY timestamp
-    LIMIT 10000
   `);
   let total = 0;
   let pepCount = 0;
@@ -675,10 +682,12 @@ export function aiFingerprint() {
   // say (bigrams + trigrams across all your prompts, minus stopwords);
   // (b) most common frustration token. Tool name stats were boring
   // because everyone's #1 is exec_command/Bash. Phrase stats are not.
+  // Full scan: phrase + frustration counts (and the hero verdict's
+  // 'said "X" N times') are displayed totals. A LIMIT samples a rowid
+  // prefix and silently deflates every count.
   const userMsgs = queryRows(`
     SELECT raw_json FROM raw_events
     WHERE payload_type IN ('user_message', 'user') OR event_type = 'user'
-    LIMIT 10000
   `);
   // Stopwords + ultra-short noise. Keep "you", "i", "can" as parts of
   // bigrams; we strip them only when they form the whole bigram.
